@@ -41,7 +41,7 @@
 ## Evidence（填写为可复现证据）
 
 - Date: 2026-02-11
-- `python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v` → OK（退出码 0；覆盖 REQ-0021-001..007）
+- `python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v` → OK（Ran 5 tests in ~55s；退出码 0；覆盖 REQ-0021-001..007）
 
 ## Steps（Strict）
 

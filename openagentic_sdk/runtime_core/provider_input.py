@@ -1,82 +1,25 @@
 from __future__ import annotations
 
-import inspect
 import json
-import os
-import re
 import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, AsyncIterator, Mapping, Sequence
+from typing import Any, AsyncIterator, Mapping
 
-from .._version import __version__ as _SDK_VERSION
-from ..events import (
-    AssistantDelta,
-    AssistantMessage,
-    Result,
-    SystemInit,
-    ToolOutputCompacted,
-    ToolResult,
-    ToolUse,
-    UserMessage,
-    UserCompaction,
-    UserQuestion,
-)
-from ..hooks.engine import HookEngine
-from ..mcp.sdk import McpSdkServerConfig, wrap_sdk_server_tools
-from ..mcp.client import StdioMcpClient
-from ..mcp.remote_client import RemoteMcpClient
-from ..mcp.wrappers import (
-    wrap_http_mcp_prompts,
-    wrap_http_mcp_resources,
-    wrap_http_mcp_tools,
-    wrap_stdio_mcp_prompts,
-    wrap_stdio_mcp_resources,
-    wrap_stdio_mcp_tools,
-)
-from ..options import OpenAgenticOptions
-from ..paths import default_session_root
-from ..prompt_system import BuiltSystemPrompt, build_system_prompt
 from ..compaction import (
-    COMPACTION_MARKER_QUESTION,
     COMPACTION_SYSTEM_PROMPT,
     COMPACTION_USER_INSTRUCTION,
-    TOOL_OUTPUT_PLACEHOLDER,
     select_tool_outputs_to_prune,
-    would_overflow,
 )
-from ..providers.base import ModelOutput, ToolCall
+from ..events import (
+    AssistantMessage,
+    ToolOutputCompacted,
+)
+from ..options import OpenAgenticOptions
 from ..sessions.rebuild import rebuild_messages, rebuild_responses_input
 from ..sessions.store import FileSessionStore
-from ..skills.index import index_skills
-from ..tools.base import ToolContext
-from ..tools.openai import tool_schemas_for_openai
-from ..tools.openai_responses import tool_schemas_for_responses
-from ..tools.task import TaskTool
-from ..commands import load_command_template
-from ..opencode_markdown import FILE_REGEX
-
-import shlex
-import asyncio
-import uuid
-
-
 from .common import (
-    _base_system_role_for_model,
-    _build_project_system_prompt,
-    _callable_accepts_kw,
-    _default_session_root,
-    _detect_provider_protocol,
-    _extract_function_call_outputs,
     _filter_supported_kwargs,
-    _looks_like_outputs_without_calls,
-    _maybe_expand_execute_skill_prompt,
-    _maybe_expand_list_skills_prompt,
-    _no_tool_call_found_for_call_output_error,
-    _prepend_function_calls_for_responses,
-    _tool_result_payload,
-    _unsupported_previous_response_id_error,
 )
+
 
 class ProviderInputMixin:
     def _with_base_system(self, items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -169,6 +112,56 @@ class ProviderInputMixin:
                 max_bytes=options.resume_max_bytes,
             )
         )
+        if provider_protocol != "legacy":
+            # Some OpenAI-compatible Responses gateways accept role/content items
+            # but reject ChatCompletions-only fields like `tool_calls` or the
+            # `tool` role. For compaction we only need a readable transcript, so
+            # we sanitize tool calls/results into plain assistant text.
+            def _to_text(v: Any) -> str:
+                if isinstance(v, str):
+                    return v
+                if v is None:
+                    return ""
+                try:
+                    return json.dumps(v, ensure_ascii=False)
+                except Exception:  # noqa: BLE001
+                    return str(v)
+
+            sanitized: list[Mapping[str, Any]] = []
+            for m in history:
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                if role == "tool":
+                    tid = m.get("tool_call_id")
+                    tid_s = tid if isinstance(tid, str) and tid else ""
+                    content_s = _to_text(m.get("content"))
+                    prefix = f"[tool.result {tid_s}]".strip()
+                    sanitized.append({"role": "assistant", "content": (prefix + "\n" + content_s).strip()})
+                    continue
+
+                if role in ("system", "user", "assistant"):
+                    content_s = _to_text(m.get("content"))
+                    tc = m.get("tool_calls")
+                    tc_lines: list[str] = []
+                    if isinstance(tc, list):
+                        for item in tc:
+                            if not isinstance(item, dict):
+                                continue
+                            fn = item.get("function")
+                            if not isinstance(fn, dict):
+                                continue
+                            nm = fn.get("name")
+                            args = fn.get("arguments")
+                            if isinstance(nm, str) and nm:
+                                tc_lines.append(f"[tool.call {nm}] {args if isinstance(args, str) else _to_text(args)}".strip())
+                    if tc_lines:
+                        joined = "\n".join(tc_lines).strip()
+                        content_s = (joined + ("\n" + content_s if content_s else "")).strip()
+                    sanitized.append({"role": role, "content": content_s})
+                    continue
+
+            history = sanitized
 
         # OpenCode parity: allow plugins to inject compaction context/prompt.
         compacting = {"context": [], "prompt": None}

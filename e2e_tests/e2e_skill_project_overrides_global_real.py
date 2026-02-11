@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 import uuid
 from dataclasses import replace
@@ -15,16 +16,26 @@ from openagentic_sdk.providers.base import ModelOutput, ToolCall
 from e2e_tests._harness import make_options
 
 
-class TestE2ESkillToolReal(unittest.IsolatedAsyncioTestCase):
-    async def test_skill_tool_loads_skill_and_returns_expected_fields(self) -> None:
-        with TemporaryDirectory() as td:
+class TestE2ESkillProjectOverridesGlobalReal(unittest.IsolatedAsyncioTestCase):
+    async def test_project_skill_overrides_global_skill(self) -> None:
+        with TemporaryDirectory() as td, TemporaryDirectory() as global_td:
             root = Path(td)
-            token = f"SKILL_TOKEN_{uuid.uuid4().hex}"
+            global_root = Path(global_td)
 
-            skill_dir = root / ".claude" / "skills" / "demo-skill"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: demo-skill\ndescription: demo\n---\n\n# Demo Skill\n\nTOKEN: " + token + "\n",
+            name = "demo-skill"
+            global_token = f"GLOBAL_{uuid.uuid4().hex}"
+            project_token = f"PROJECT_{uuid.uuid4().hex}"
+
+            (global_root / "skills" / name).mkdir(parents=True)
+            (global_root / "skills" / name / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: global\n---\n\nTOKEN: {global_token}\n",
+                encoding="utf-8",
+            )
+
+            project_skill_dir = root / ".claude" / "skills" / name
+            project_skill_dir.mkdir(parents=True)
+            (project_skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: project\n---\n\nTOKEN: {project_token}\n",
                 encoding="utf-8",
             )
 
@@ -43,13 +54,7 @@ class TestE2ESkillToolReal(unittest.IsolatedAsyncioTestCase):
                         action="inject_skill",
                         override_tool_output=ModelOutput(
                             assistant_text=None,
-                            tool_calls=[
-                                ToolCall(
-                                    tool_use_id="call-skill-1",
-                                    name="Skill",
-                                    arguments={"name": "demo-skill"},
-                                )
-                            ],
+                            tool_calls=[ToolCall(tool_use_id="call-skill-1", name="Skill", arguments={"name": name})],
                             usage=usage if isinstance(usage, dict) else None,
                             response_id=rid if isinstance(rid, str) else None,
                             provider_metadata=pm if isinstance(pm, dict) else None,
@@ -61,7 +66,7 @@ class TestE2ESkillToolReal(unittest.IsolatedAsyncioTestCase):
                     return HookDecision(
                         action="inject_final_text",
                         override_tool_output=ModelOutput(
-                            assistant_text="SKILL_OK",
+                            assistant_text="SKILL_OVERRIDE_OK",
                             tool_calls=[],
                             usage=usage if isinstance(usage, dict) else None,
                             response_id=rid if isinstance(rid, str) else None,
@@ -75,22 +80,31 @@ class TestE2ESkillToolReal(unittest.IsolatedAsyncioTestCase):
             opts0 = make_options(root, allowed_tools=["Skill"], hooks=hooks)
             opts = replace(opts0, max_steps=5)
 
-            events: list[object] = []
-            async for ev in openagentic_sdk.query(prompt="Load demo skill", options=opts):
-                events.append(ev)
+            old_home = os.environ.get("OPENAGENTIC_SDK_HOME")
+            os.environ["OPENAGENTIC_SDK_HOME"] = str(global_root)
+            try:
+                events: list[object] = []
+                async for ev in openagentic_sdk.query(prompt="Load demo skill", options=opts):
+                    events.append(ev)
+            finally:
+                if old_home is None:
+                    os.environ.pop("OPENAGENTIC_SDK_HOME", None)
+                else:
+                    os.environ["OPENAGENTIC_SDK_HOME"] = old_home
 
-            outs = [
+            outputs = [
                 getattr(e, "output", None)
                 for e in events
                 if getattr(e, "type", None) == "tool.result" and getattr(e, "tool_use_id", None) == "call-skill-1"
             ]
-            self.assertTrue(outs)
-            out = outs[-1]
+            self.assertTrue(outputs)
+            out = outputs[-1]
             self.assertIsInstance(out, dict)
-            self.assertEqual(out.get("name"), "demo-skill")
-            self.assertIn(token, str(out.get("output") or ""))
-            self.assertIn(str(skill_dir / "SKILL.md"), str(out.get("path") or ""))
+            self.assertIn(project_token, str(out.get("output") or ""))
+            self.assertNotIn(global_token, str(out.get("output") or ""))
+            self.assertIn(str(project_skill_dir / "SKILL.md"), str(out.get("path") or ""))
 
 
 if __name__ == "__main__":
     unittest.main()
+

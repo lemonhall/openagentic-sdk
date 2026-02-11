@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from ..events import Event, SessionCheckpoint, SessionRedo, SessionSetHead, SessionUndo
+from ..events import AssistantDelta, Event, SessionCheckpoint, SessionRedo, SessionSetHead, SessionUndo
 from ..serialization import event_to_dict, loads_event
 from .paths import events_path, meta_path, session_dir, transcript_path
 
@@ -143,6 +143,9 @@ class FileSessionStore:
         return new_id
 
     def append_event(self, session_id: str, event: Event) -> None:
+        # Never persist streaming deltas; they can balloon session files to GBs.
+        if isinstance(event, AssistantDelta):
+            return
         # Validate session id before path usage.
         _ = self.session_dir(session_id)
         with self._session_lock(session_id):

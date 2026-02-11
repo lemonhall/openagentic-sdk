@@ -79,13 +79,14 @@ async def iter_stream_model_call(
                         delta = ev.get("delta")
                     if isinstance(delta, str) and delta:
                         parts.append(delta)
-                        de = AssistantDelta(
-                            text_delta=delta,
-                            parent_tool_use_id=runtime._parent_tool_use_id,
-                            agent_name=runtime._agent_name,
-                        )
-                        store.append_event(session_id, de)
-                        yield de
+                        # Never persist deltas to events.jsonl (they can explode session size).
+                        # Only emit them to the caller when explicitly requested.
+                        if options.include_partial_messages:
+                            yield AssistantDelta(
+                                text_delta=delta,
+                                parent_tool_use_id=runtime._parent_tool_use_id,
+                                agent_name=runtime._agent_name,
+                            )
                 elif ev_type == "tool_call":
                     tc = getattr(ev, "tool_call", None)
                     if tc is None and isinstance(ev, dict):
@@ -142,4 +143,3 @@ async def iter_stream_model_call(
         response_id=stream_response_id,
     )
     yield ModelCallDone(model_out=model_out, messages=list(messages), supports_previous_response_id=supports_previous_response_id)
-

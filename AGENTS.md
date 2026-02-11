@@ -58,6 +58,9 @@
 - **人类交互 & 权限门（Human-in-the-loop）**
   - `openagentic_sdk/permissions/`（`PermissionGate`、prompt/callback/bypass/deny 等模式）
   - `openagentic_sdk/runtime_core/tool_ask_user_question.py`（AskUserQuestion 通过 `user_answerer` 与人类交互）
+- **Sessions / Resume（会话落盘与恢复）**
+  - `openagentic_sdk/sessions/`（会话落盘：`events.jsonl`；恢复：`OpenAgenticOptions.resume` / 事件重建）
+  - 关键约束：`events.jsonl` 只落“可回归、可解释”的关键事件（user/assistant message、tool.use/result、hook、compaction 等）；**不要落 streaming delta（assistant.delta / text_delta）**，否则会膨胀到 GB 级。
 
 ### 数据流（简图）
 

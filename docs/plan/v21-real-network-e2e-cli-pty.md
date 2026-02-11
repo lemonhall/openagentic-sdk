@@ -41,7 +41,7 @@
 ## Evidence（填写为可复现证据）
 
 - Date: 2026-02-11
-- `python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v` → 部分通过（已有：help/exit、多轮落盘、resume/logs；待补：/new、paste）
+- `python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v` → OK（退出码 0；覆盖 REQ-0021-001..007）
 
 ## Steps（Strict）
 
@@ -74,4 +74,3 @@ wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest dis
 
 - `.env`：测试 harness 会 best-effort 加载仓库根目录 `.env`（`openagentic_cli` 本身不自动加载）。
 - 最少必需：`RIGHTCODE_API_KEY`（或 `OPENAI_API_KEY`）。
-

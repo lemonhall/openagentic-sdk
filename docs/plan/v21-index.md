@@ -15,7 +15,7 @@
   - PRD: `docs/prd/PRD-0021-real-network-e2e-cli-pty-v21.md`
   - DoD（命令证据）：
     - `python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v`
-  - Status: doing（2026-02-11）
+  - Status: done（2026-02-11）
 
 ## Traceability Matrix (Req → Plan → Tests → Evidence)
 
@@ -23,8 +23,8 @@
 - REQ-0021-002 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_repl_help_exit_tty.py` → Evidence in plan
 - REQ-0021-003 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_repl_help_exit_tty.py` → Evidence in plan
 - REQ-0021-004 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_repl_long_session_real.py` → Evidence in plan
-- REQ-0021-005 → `docs/plan/v21-real-network-e2e-cli-pty.md` → (TBD) `e2e_cli_tests/e2e_cli_repl_new_session_real.py` → Evidence in plan
-- REQ-0021-006 → `docs/plan/v21-real-network-e2e-cli-pty.md` → (TBD) `e2e_cli_tests/e2e_cli_repl_paste_modes_real.py` → Evidence in plan
+- REQ-0021-005 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_repl_new_session_real.py` → Evidence in plan
+- REQ-0021-006 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_repl_paste_modes_real.py` → Evidence in plan
 - REQ-0021-007 → `docs/plan/v21-real-network-e2e-cli-pty.md` → `e2e_cli_tests/e2e_cli_resume_and_logs_real.py` → Evidence in plan
 
 ## ECN
@@ -33,5 +33,4 @@
 
 ## Deltas (Vision vs Reality)
 
-- v21 目标是把“CLI 真交互”纳入 E2E 证据链；当前已完成 PTY harness + 基础用例骨架，但 `/new` 与 paste 语义仍需补齐以满足 PRD 的全部 REQ。
-
+- 已把“CLI 真交互”（POSIX pty）纳入可回归证据链：覆盖 help/exit、多轮落盘、/new、新旧会话隔离、/paste 与 bracketed paste、logs/resume 互操作。

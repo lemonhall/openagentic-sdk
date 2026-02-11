@@ -40,6 +40,25 @@
 - 文档：`docs/`
 - 示例：`example/`
 
+### 核心模块定义（默认优先级最高）
+
+为了避免每次对话都重复强调，这里把本项目的“核心中的核心”明确为：**能让 AI 对话、使用工具/Skill、并与人类交互**的最基础模块。默认情况下，讨论/对齐/加测试都应优先覆盖这些模块（除非用户明确要求关注 Gateway/MCP 等边缘模块）。
+
+- **Runtime Core（对话/工具循环）**
+  - `openagentic_sdk/runtime_core/`（query loop、tool plumbing、provider input、compaction、事件落盘/恢复的关键路径）
+  - `openagentic_sdk/runtime.py`（对外 API 的兼容入口与 re-export）
+- **Tools（工具系统）**
+  - `openagentic_sdk/tools/`（Tool 定义、schema、registry、核心工具如 Read/Write/Edit/Skill/AskUserQuestion/TodoWrite/SlashCommand）
+  - `openagentic_sdk/runtime_core/tool_runner.py`、`openagentic_sdk/runtime_core/query_loop_steps/tool_plumbing.py`（tool loop 的协议适配与序列化）
+- **Skills / Commands（技能与命令加载）**
+  - `openagentic_sdk/skills/`、`openagentic_sdk/tools/skill.py`
+  - `openagentic_sdk/commands.py`（`/slash` 直执行与模板加载链路）
+- **Hooks（可插拔改写/拦截）**
+  - `openagentic_sdk/hooks/`（`HookEngine`、matcher/decision、Before/AfterModelCall、Pre/PostToolUse、UserPromptSubmit 等）
+- **人类交互 & 权限门（Human-in-the-loop）**
+  - `openagentic_sdk/permissions/`（`PermissionGate`、prompt/callback/bypass/deny 等模式）
+  - `openagentic_sdk/runtime_core/tool_ask_user_question.py`（AskUserQuestion 通过 `user_answerer` 与人类交互）
+
 ### 数据流（简图）
 
 `openagentic_cli` / 你的代码
@@ -90,6 +109,7 @@ git config --local https.proxy http://127.0.0.1:7897
 ## 安全与“不要这样做”
 
 - 不要提交密钥/Token：例如 `RIGHTCODE_API_KEY`、`OPENAI_API_KEY`、`TAVILY_API_KEY`、cookie、私钥文件等。
+- 不要提交 `.env`：把本机 `.env` 仅用于本地开发/测试，并确保在 `.gitignore` 中忽略。
 - 不要默认运行 `e2e_tests/`：这些测试会请求真实 OpenAI-compatible API，可能产生费用与速率限制。
 - 不要做危险删除：`Remove-Item -Recurse -Force` / `rm -rf` 这类操作前必须确认目标目录与影响范围。
 - 改了行为就补测试：对你改动的模块，至少补/改对应的 `tests/` 用例；保证 `python -m unittest -q` 通过。

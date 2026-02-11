@@ -52,7 +52,8 @@ def resolve_tool_path(file_path: str, ctx: ToolContext) -> Path:
       basename fallback).
     """
 
-    base = Path(ctx.project_dir) if isinstance(ctx.project_dir, str) and ctx.project_dir else Path(ctx.cwd)
+    project_root = Path(ctx.project_dir) if isinstance(ctx.project_dir, str) and ctx.project_dir else Path(ctx.cwd)
+    cwd = Path(ctx.cwd)
 
     # Windows gateways/providers sometimes emit POSIX-style absolute paths.
     # Handle these before going through Path(), because WindowsPath treats
@@ -65,7 +66,7 @@ def resolve_tool_path(file_path: str, ctx: ToolContext) -> Path:
         # WSL-style drive mounts: /mnt/c/Users/... -> C:\Users\...
         if len(parts) >= 4 and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha():
             drive = parts[2].upper() + ":"
-            return _ensure_under_base(Path(drive) / Path(*parts[3:]), base)
+            return _ensure_under_base(Path(drive) / Path(*parts[3:]), project_root)
 
         # Workspace-ish mounts used by some runners.
         for prefix in _POSIX_PREFIXES_TO_CWD:
@@ -73,17 +74,19 @@ def resolve_tool_path(file_path: str, ctx: ToolContext) -> Path:
                 rel = posix.relative_to(prefix)
             except ValueError:
                 continue
-            return _ensure_under_base(base / Path(*rel.parts), base)
+            return _ensure_under_base(project_root / Path(*rel.parts), project_root)
 
         # If the path is a single filename (e.g. /a.txt), map under base.
         if len(parts) == 2 and parts[0] == "/":
-            return _ensure_under_base(base / parts[1], base)
+            return _ensure_under_base(project_root / parts[1], project_root)
 
-        raise ValueError(f"Tool path must be under project root: {base.resolve()}")
+        raise ValueError(f"Tool path must be under project root: {project_root.resolve()}")
 
     p = Path(file_path)
     if not p.is_absolute():
-        return _ensure_under_base(base / p, base)
+        # Relative paths resolve from the working directory, but must remain
+        # under the project root.
+        return _ensure_under_base(cwd / p, project_root)
 
     # Absolute paths are only allowed when they resolve under the project root.
-    return _ensure_under_base(p, base)
+    return _ensure_under_base(p, project_root)

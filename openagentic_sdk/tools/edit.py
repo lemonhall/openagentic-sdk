@@ -21,6 +21,12 @@ class EditTool(Tool):
         before = tool_input.get("before")
         after = tool_input.get("after")
 
+        # Models/providers sometimes emit empty-string context anchors. Treat them as "not provided".
+        if isinstance(before, str) and before.strip() == "":
+            before = None
+        if isinstance(after, str) and after.strip() == "":
+            after = None
+
         if not isinstance(file_path, str) or not file_path:
             raise ValueError("Edit: 'file_path' must be a non-empty string")
         if not isinstance(old, str) or old == "":

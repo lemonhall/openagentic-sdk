@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .base import Tool, ToolContext
+from .path_utils import coerce_non_empty_str, resolve_tool_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,7 +15,7 @@ class WriteTool(Tool):
     description: str = "Create or overwrite a file."
 
     async def run(self, tool_input: Mapping[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        file_path = tool_input.get("file_path", tool_input.get("filePath"))
+        file_path = coerce_non_empty_str(tool_input.get("file_path")) or coerce_non_empty_str(tool_input.get("filePath"))
         content = tool_input.get("content")
         overwrite = bool(tool_input.get("overwrite", False))
 
@@ -23,9 +24,7 @@ class WriteTool(Tool):
         if not isinstance(content, str):
             raise ValueError("Write: 'content' must be a string")
 
-        p = Path(file_path)
-        if not p.is_absolute():
-            p = Path(ctx.cwd) / p
+        p = resolve_tool_path(file_path, ctx)
         p.parent.mkdir(parents=True, exist_ok=True)
 
         if p.exists() and not overwrite:

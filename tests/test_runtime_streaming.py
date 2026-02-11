@@ -29,6 +29,7 @@ class TestRuntimeStreaming(unittest.IsolatedAsyncioTestCase):
                 cwd=str(root),
                 permission_gate=PermissionGate(permission_mode="bypass"),
                 session_store=store,
+                include_partial_messages=True,
             )
             import openagentic_sdk
 

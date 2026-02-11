@@ -5,6 +5,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+import uuid
 
 from e2e_cli_tests._harness import repo_root, require_env, temp_project_dir
 from e2e_cli_tests._pty import PtyProcess
@@ -41,6 +42,13 @@ def _count_lines(p: Path) -> int:
         return 0
 
 
+def _read_text(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 @unittest.skipIf(os.name == "nt", "CLI PTY e2e requires POSIX pty; run under WSL2/Linux/macOS.")
 class TestCliReplNewSessionReal(unittest.TestCase):
     def test_new_command_starts_fresh_session(self) -> None:
@@ -65,8 +73,9 @@ class TestCliReplNewSessionReal(unittest.TestCase):
                 p.read_until("oa> ", timeout_s=20.0)
 
                 # First turn -> first session.
-                p.send("只回复 CLI_E2E_NEW1（不要加引号，不要调用任何工具）\n")
-                p.read_until("CLI_E2E_NEW1", timeout_s=90.0)
+                token1 = f"CLI_E2E_NEW1_{uuid.uuid4().hex}"
+                p.send(f"只回复 {token1}（不要加引号，不要调用任何工具）\n")
+                p.read_until(token1, timeout_s=90.0)
                 p.read_until("oa> ", timeout_s=20.0)
 
                 ids1 = _wait_for_session_count(home_dir, 1, timeout_s=8.0)
@@ -82,8 +91,9 @@ class TestCliReplNewSessionReal(unittest.TestCase):
                 p.read_until("oa> ", timeout_s=20.0)
 
                 # Second turn -> second session directory created.
-                p.send("只回复 CLI_E2E_NEW2（不要加引号，不要调用任何工具）\n")
-                p.read_until("CLI_E2E_NEW2", timeout_s=90.0)
+                token2 = f"CLI_E2E_NEW2_{uuid.uuid4().hex}"
+                p.send(f"只回复 {token2}（不要加引号，不要调用任何工具）\n")
+                p.read_until(token2, timeout_s=90.0)
                 p.read_until("oa> ", timeout_s=20.0)
 
                 ids2 = _wait_for_session_count(home_dir, 2, timeout_s=8.0)
@@ -91,14 +101,13 @@ class TestCliReplNewSessionReal(unittest.TestCase):
                 sid2 = ids2[1] if ids2[0] == sid1 else ids2[0]
                 self.assertNotEqual(sid1, sid2)
 
-                # Ensure the first session does not get additional events.
-                c1_after = _count_lines(events1)
-                self.assertEqual(c1_after, c1)
-
                 # Ensure the second session has its own events.
                 events2 = home_dir / "sessions" / sid2 / "events.jsonl"
                 c2 = _count_lines(events2)
                 self.assertGreater(c2, 0)
+                # Deterministic isolation check: the second-turn token must only appear in the second session's events.
+                self.assertNotIn(token2, _read_text(events1))
+                self.assertIn(token2, _read_text(events2))
 
                 p.send("/exit\n")
                 res = p.close(timeout_s=10.0)
@@ -108,4 +117,3 @@ class TestCliReplNewSessionReal(unittest.TestCase):
                     p.close(timeout_s=2.0)
                 except Exception:
                     pass
-

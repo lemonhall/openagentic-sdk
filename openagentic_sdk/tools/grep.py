@@ -23,7 +23,10 @@ class GrepTool(Tool):
             raise ValueError("Grep: 'file_glob' must be a non-empty string")
 
         root_in = tool_input.get("root", tool_input.get("path"))
-        root = Path(ctx.cwd) if root_in is None else Path(str(root_in))
+        root = Path(ctx.cwd)
+        if root_in is not None:
+            p = Path(str(root_in))
+            root = p if p.is_absolute() else (root / p)
 
         flags = 0 if tool_input.get("case_sensitive", True) else re.IGNORECASE
         rx = re.compile(query, flags=flags)

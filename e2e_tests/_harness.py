@@ -11,7 +11,6 @@ from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.providers.openai_responses import OpenAIResponsesProvider
 from openagentic_sdk.sessions.store import FileSessionStore
 
-
 _ENV_ALIASES: dict[str, tuple[str, ...]] = {
     # User-local .env convention.
     "RIGHTCODE_API_KEY": ("OPENAI_API_KEY",),

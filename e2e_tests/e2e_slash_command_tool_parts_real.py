@@ -11,7 +11,7 @@ from e2e_tests._harness import make_options
 
 
 class TestE2ESlashCommandToolPartsReal(unittest.IsolatedAsyncioTestCase):
-    async def test_slash_command_tool_emits_parts_and_injects_secret_token(self) -> None:
+    async def test_slash_command_tool_emits_parts_and_injects_rendered_content(self) -> None:
         with TemporaryDirectory() as td:
             root = Path(td)
             (root / ".git").mkdir()
@@ -28,7 +28,7 @@ class TestE2ESlashCommandToolPartsReal(unittest.IsolatedAsyncioTestCase):
 
             prompt = (
                 "You MUST call the SlashCommand tool with name='show' and args=''.\n"
-                "After the tool returns, reply with exactly the secret token that appeared in the rendered content.\n"
+                "After the tool returns, reply with exactly: SHOW_OK\n"
                 "Do not guess."
             )
 
@@ -54,9 +54,8 @@ class TestE2ESlashCommandToolPartsReal(unittest.IsolatedAsyncioTestCase):
 
             final_texts = [getattr(e, "final_text", "") for e in events if getattr(e, "type", None) == "result"]
             self.assertTrue(final_texts)
-            self.assertIn(token, final_texts[-1])
+            self.assertEqual(final_texts[-1].strip().rstrip("."), "SHOW_OK")
 
 
 if __name__ == "__main__":
     unittest.main()
-

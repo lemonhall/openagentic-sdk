@@ -272,7 +272,19 @@ async def run_chat(
         return str(ans).strip().lower() in ("y", "yes")
 
     stdin_is_tty = bool(getattr(stdin, "isatty", lambda: False)())
-    if is_tty and stdin_is_tty:
+    perm_mode = getattr(getattr(opts, "permission_gate", None), "permission_mode", "default")
+    autoapprove_prompt_enabled = os.getenv("OA_CLI_AUTOAPPROVE_PROMPT", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    if (
+        is_tty
+        and stdin_is_tty
+        and autoapprove_prompt_enabled
+        and str(perm_mode).strip().lower() in ("default", "prompt", "acceptedits", "callback")
+    ):
         base = Path(opts.cwd)
         auto_prompt = f"Auto-approve Write/Edit/Bash within `{base}` (and subdirs) for this chat session? [y/N] "
         auto_allow = _prompt_yes_no(auto_prompt)

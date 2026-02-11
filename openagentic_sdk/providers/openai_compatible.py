@@ -71,7 +71,102 @@ def _default_transport(
             raise RuntimeError(f"Request failed to {url}: {e}".strip()) from e
     else:  # pragma: no cover
         raise RuntimeError(f"Request failed to {url}: {last_exc}".strip()) from last_exc
-    return json.loads(raw.decode("utf-8"))
+
+    if not raw:
+        raise RuntimeError(f"Empty response body from {url}")
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as e:
+        # Some OpenAI-compatible gateways may respond with SSE even when the
+        # request did not explicitly set stream=true. Best-effort: parse the
+        # SSE transcript and synthesize a Responses-like object.
+        if b"data:" in raw[:2000]:
+            out_text: list[str] = []
+            response_id: str | None = None
+            usage: Mapping[str, Any] | None = None
+            ongoing: dict[int, dict[str, Any]] = {}
+            tool_calls: list[Mapping[str, Any]] = []
+
+            for data in parse_sse_events(_iter_lines(raw.splitlines(keepends=True))):
+                if data.strip() == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                typ = obj.get("type")
+                if not isinstance(typ, str):
+                    continue
+
+                rid0 = obj.get("response_id")
+                if isinstance(rid0, str) and rid0:
+                    response_id = rid0
+
+                if typ == "response.created":
+                    resp_obj = obj.get("response")
+                    if isinstance(resp_obj, dict):
+                        rid = resp_obj.get("id")
+                        if isinstance(rid, str) and rid:
+                            response_id = rid
+                    continue
+
+                if typ == "response.output_text.delta":
+                    delta = obj.get("delta")
+                    if isinstance(delta, str) and delta:
+                        out_text.append(delta)
+                    continue
+
+                if typ == "response.output_item.added":
+                    output_index = obj.get("output_index")
+                    item = obj.get("item")
+                    if isinstance(output_index, int) and isinstance(item, dict) and item.get("type") == "function_call":
+                        call_id = item.get("call_id")
+                        name = item.get("name")
+                        if isinstance(call_id, str) and call_id and isinstance(name, str) and name:
+                            ongoing[output_index] = {"call_id": call_id, "name": name, "arguments": ""}
+                    continue
+
+                if typ == "response.function_call_arguments.delta":
+                    output_index = obj.get("output_index")
+                    delta = obj.get("delta")
+                    if isinstance(output_index, int) and isinstance(delta, str) and output_index in ongoing:
+                        ongoing[output_index]["arguments"] += delta
+                    continue
+
+                if typ == "response.output_item.done":
+                    output_index = obj.get("output_index")
+                    item = obj.get("item")
+                    if isinstance(output_index, int) and isinstance(item, dict) and item.get("type") == "function_call":
+                        st = ongoing.get(output_index) or {}
+                        call_id = st.get("call_id") or item.get("call_id")
+                        name = st.get("name") or item.get("name")
+                        arguments = st.get("arguments") or item.get("arguments") or ""
+                        if isinstance(call_id, str) and call_id and isinstance(name, str) and name:
+                            tool_calls.append({"type": "function_call", "call_id": call_id, "name": name, "arguments": arguments})
+                    continue
+
+                if typ == "response.completed":
+                    resp_obj = obj.get("response")
+                    if isinstance(resp_obj, dict):
+                        rid = resp_obj.get("id")
+                        if isinstance(rid, str) and rid:
+                            response_id = rid
+                        u = resp_obj.get("usage")
+                        usage = u if isinstance(u, dict) else usage
+                    continue
+
+            output_items: list[Mapping[str, Any]] = []
+            text = "".join(out_text).strip()
+            if text:
+                output_items.append({"type": "message", "content": [{"type": "output_text", "text": text}]})
+            output_items.extend(tool_calls)
+            return {"id": response_id, "output": output_items, "usage": usage}
+
+        snippet = raw[:500].decode("utf-8", errors="replace")
+        raise RuntimeError(f"Non-JSON response from {url}: {snippet!r}") from e
 
 
 def _default_stream_transport(

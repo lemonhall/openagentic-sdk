@@ -24,5 +24,8 @@ coverage.xml
 # Sessions
 .openagentic-sdk
 
+# Local secrets (do not commit)
+.env
+
 
 .pypirc

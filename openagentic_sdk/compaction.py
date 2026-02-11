@@ -41,6 +41,7 @@ class UsageTotals:
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
+    cache_write_tokens: int
     total_tokens: int
 
 
@@ -58,10 +59,11 @@ def parse_usage_totals(usage: Mapping[str, Any] | None) -> UsageTotals | None:
     input_tokens = _int(usage.get("input_tokens") or usage.get("prompt_tokens"))
     output_tokens = _int(usage.get("output_tokens") or usage.get("completion_tokens"))
     cache_read_tokens = _int(usage.get("cache_read_tokens") or usage.get("cached_tokens"))
+    cache_write_tokens = _int(usage.get("cache_write_tokens"))
     total_tokens = _int(usage.get("total_tokens"))
 
     if total_tokens <= 0:
-        total_tokens = input_tokens + output_tokens + cache_read_tokens
+        total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
 
     if total_tokens <= 0:
         return None
@@ -70,6 +72,7 @@ def parse_usage_totals(usage: Mapping[str, Any] | None) -> UsageTotals | None:
         input_tokens=max(0, input_tokens),
         output_tokens=max(0, output_tokens),
         cache_read_tokens=max(0, cache_read_tokens),
+        cache_write_tokens=max(0, cache_write_tokens),
         total_tokens=max(0, total_tokens),
     )
 
@@ -83,14 +86,21 @@ def would_overflow(*, compaction: CompactionOptions, usage: Mapping[str, Any] | 
     if context_limit <= 0:
         return False
 
-    output_cap = int(compaction.global_output_cap or 0)
+    output_cap = max(0, int(compaction.global_output_cap or 0))
     output_limit = compaction.output_limit
-    output_reserve = min(int(output_limit), output_cap) if isinstance(output_limit, int) and output_limit > 0 else output_cap
-    usable = context_limit - max(0, output_reserve)
+    max_output_tokens = min(int(output_limit), output_cap) if isinstance(output_limit, int) and output_limit > 0 else output_cap
+
+    reserved = compaction.reserved
+    if not isinstance(reserved, int) or reserved <= 0:
+        reserved = min(20_000, max_output_tokens)
+
+    effective_limit = compaction.input_limit if isinstance(compaction.input_limit, int) and compaction.input_limit > 0 else context_limit
+    usable = int(effective_limit) - max(0, int(reserved))
     if usable <= 0:
         return True
 
-    return totals.total_tokens > usable
+    # OpenCode parity: overflow is triggered at the boundary (>=).
+    return totals.total_tokens >= usable
 
 
 def estimate_tokens(text: str) -> int:

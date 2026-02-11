@@ -590,7 +590,7 @@ class AgentRuntime:
         refs = [m.group(1) for m in FILE_REGEX.finditer(text) if m.group(1)]
         refs = list(dict.fromkeys(refs))
 
-        appended: list[str] = []
+        injections: list[str] = []
 
         def _find_worktree_root(start: Path) -> Path:
             cur = start.resolve()
@@ -618,20 +618,13 @@ class AgentRuntime:
                 if ref in (options.agents or {}):
                     if not is_subtask:
                         parts.append({"type": "agent", "name": ref})
-                    appended.append(
-                        "Agent reference: "
-                        + ref
-                        + "\n"
-                        + "Use the above message and context to generate a prompt and call the Task tool with subagent: "
-                        + ref
-                    )
                 continue
 
             if not is_subtask:
                 parts.append(
                     {
                         "type": "file",
-                        "url": "file://" + str(p),
+                        "url": p.as_uri(),
                         "filename": ref,
                         "mime": "application/x-directory" if p.is_dir() else "text/plain",
                     }
@@ -653,12 +646,8 @@ class AgentRuntime:
                 tool = options.tools.get("List")
                 out_obj = await tool.run(approval.updated_input or {"path": str(p)}, ToolContext(cwd=options.cwd, project_dir=options.project_dir))
                 out = out_obj.get("output") if isinstance(out_obj, dict) else None
-                appended.append(
-                    "Called the list tool with the following input: "
-                    + json.dumps({"path": str(p)}, ensure_ascii=False)
-                    + "\n"
-                    + (out if isinstance(out, str) else "")
-                )
+                if isinstance(out, str) and out:
+                    injections.append(out)
                 continue
 
             # Default: treat as text/plain and inline via Read tool.
@@ -674,16 +663,12 @@ class AgentRuntime:
             tool = options.tools.get("Read")
             out_obj = await tool.run(approval.updated_input or {"file_path": str(p)}, ToolContext(cwd=options.cwd, project_dir=options.project_dir))
             content = out_obj.get("content") if isinstance(out_obj, dict) else None
-            appended.append(
-                "Called the Read tool with the following input: "
-                + json.dumps({"file_path": str(p)}, ensure_ascii=False)
-                + "\n"
-                + (content if isinstance(content, str) else "")
-            )
+            if isinstance(content, str) and content:
+                injections.append(content)
 
         rendered = text
-        if appended and not is_subtask:
-            rendered = (rendered + "\n\n" + "\n\n".join([b for b in appended if b.strip()])).strip()
+        if injections and not is_subtask:
+            rendered = (rendered + "\n\n" + "\n\n".join([b for b in injections if b.strip()])).strip()
         return rendered, sources, parts
 
     async def query(self, prompt: str) -> AsyncIterator[Any]:

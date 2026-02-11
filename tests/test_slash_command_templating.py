@@ -49,9 +49,10 @@ class LegacyProviderAsksSlashCommand:
         self.assertIn("Args: world foo", content)
         self.assertIn("SECOND: foo", content)
         self.assertIn("INCLUDED: @input.txt", content)
-        self.assertIn("Called the Read tool", content)
         self.assertIn("filedata", content)
         self.assertIn("SHELL: shellout", content)
+        self.assertNotIn("Called the Read tool", content)
+        self.assertNotIn("Called the list tool", content)
 
         return ModelOutput(assistant_text="ok", tool_calls=(), usage={"total_tokens": 2}, raw=None)
 
@@ -66,6 +67,10 @@ class LegacyProviderAsksSlashCommand:
     def assertIn(self, needle: str, haystack: str) -> None:
         if needle not in haystack:
             raise AssertionError(f"expected {needle!r} in text")
+
+    def assertNotIn(self, needle: str, haystack: str) -> None:
+        if needle in haystack:
+            raise AssertionError(f"expected {needle!r} not in text")
 
 
 class TestSlashCommandTemplating(unittest.IsolatedAsyncioTestCase):

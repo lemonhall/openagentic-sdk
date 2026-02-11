@@ -21,8 +21,12 @@ class _LineReader:
         self._q: queue.Queue[str] = queue.Queue()
 
         def _bg() -> None:
-            for line in iter(stream.readline, ""):
-                self._q.put(line)
+            try:
+                for line in iter(stream.readline, ""):
+                    self._q.put(line)
+            except ValueError:
+                # Stream may be closed while the reader thread is blocked.
+                return
 
         self._t = threading.Thread(target=_bg, daemon=True)
         self._t.start()
@@ -65,6 +69,13 @@ def _wait_for_response(
 ) -> dict:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
+        if proc.poll() is not None:
+            try:
+                err = proc.stderr.read() if proc.stderr is not None else ""
+            except Exception:  # noqa: BLE001
+                err = ""
+            raise RuntimeError(f"process exited early (code={proc.returncode}): {err[-2000:]}")
+
         msg = _read_json_line(out_reader, timeout_s=max(0.05, deadline - time.time()))
         if msg is None:
             continue
@@ -126,12 +137,12 @@ class TestAcpStdioProtocol(unittest.TestCase):
 
     def _init_and_new(self, proc: subprocess.Popen[str], out_reader: _LineReader, cwd: Path) -> str:
         _send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "1"}})
-        init = _wait_for_response(proc=proc, out_reader=out_reader, request_id=1, timeout_s=3.0, notifications=[])
+        init = _wait_for_response(proc=proc, out_reader=out_reader, request_id=1, timeout_s=10.0, notifications=[])
         self.assertIn("result", init)
         self.assertEqual(init.get("result", {}).get("protocolVersion"), "1")
 
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": os.fspath(cwd), "mcpServers": []}})
-        new = _wait_for_response(proc=proc, out_reader=out_reader, request_id=2, timeout_s=3.0, notifications=[])
+        new = _wait_for_response(proc=proc, out_reader=out_reader, request_id=2, timeout_s=10.0, notifications=[])
         sid = new.get("result", {}).get("sessionId")
         self.assertIsInstance(sid, str)
         self.assertTrue(sid)

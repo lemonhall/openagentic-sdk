@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-# Thin compatibility layer: runtime implementation moved to runtime_core/.
-
-from .runtime_core.agent_runtime import AgentRuntime
-from .runtime_core.common import (
+from .agent_runtime import AgentRuntime
+from .common import (
     RunResult,
     _build_project_system_prompt,
     _maybe_expand_execute_skill_prompt,

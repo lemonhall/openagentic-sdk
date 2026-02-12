@@ -18,6 +18,8 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_flow_resume_accept_edits_edit_then_read_real_no_injection",
     # v42: resume + post_tool_use override (redaction on second run).
     "e2e_tests.e2e_flow_resume_post_tool_use_override_read_redacted_real_no_injection",
+    # v47: events.jsonl never persists assistant.delta (anti-GB guard).
+    "e2e_tests.e2e_flow_sessions_events_exclude_assistant_delta_real_no_injection",
 )
 
 

@@ -50,7 +50,10 @@
 |---|---|---:|---|
 | `events.jsonl` append-only（两次 run） | `e2e_sessions_resume_two_turns_append_real_no_injection.py` | ✅ | 可补：同 session 多 turn 多工具混合 |
 | 权限 prompt 在 resume 下可继续 | `e2e_sessions_resume_permission_prompt_write_then_read_real_no_injection.py` | ✅ | 可补：callback 权限、deny/allow 混合 |
+| resume × permissions(prompt) deny→allow | `e2e_sessions_resume_permission_prompt_deny_then_allow_write_real_injected.py` | ✅ | 覆盖 deny→resume→allow 的 append-only 与无副作用 |
+| resume × hooks(post_tool_use block) | `e2e_sessions_resume_post_tool_use_block_then_unblock_read_real_injected.py` | ✅ | 覆盖失败落盘后 resume 仍可继续 |
 | compaction/prune 与 resume 兼容 | compaction/prune 若干用例 | ✅/△ | 仍需补：prune 后恢复读写链路不破 |
+| prune × resume × tools 可用性 | `e2e_compaction_prune_then_resume_read_still_works_real_injected.py` | ✅ | 覆盖 prune 后继续 Read 的硬证据 |
 | **禁止落 streaming delta** | `e2e_sessions_events_jsonl_excludes_deltas_real_no_injection.py` | ✅ | 这是硬约束（防止膨胀到 GB 级） |
 
 ---

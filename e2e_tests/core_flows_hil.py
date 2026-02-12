@@ -22,6 +22,10 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_hooks_pre_tool_use_rewrite_read_real_no_injection",
     # v40: post_tool_use output override user-flow (no injection).
     "e2e_tests.e2e_flow_hooks_post_tool_use_override_read_output_real_no_injection",
+    # v42: pre_tool_use rewrites Write path (user-flow).
+    "e2e_tests.e2e_flow_hooks_pre_tool_use_rewrite_write_path_real_no_injection",
+    # v42: default permission safe Read no prompt (no injection).
+    "e2e_tests.e2e_flow_perm_default_read_no_prompt_real_no_injection",
 )
 
 

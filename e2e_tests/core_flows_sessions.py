@@ -14,6 +14,10 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_flow_resume_prompt_permission_deny_then_allow_write_real_no_injection",
     # v40: prune + resume still usable.
     "e2e_tests.e2e_flow_prune_then_resume_read_small_real_no_injection",
+    # v42: resume + acceptEdits (no prompt) + edit/read.
+    "e2e_tests.e2e_flow_resume_accept_edits_edit_then_read_real_no_injection",
+    # v42: resume + post_tool_use override (redaction on second run).
+    "e2e_tests.e2e_flow_resume_post_tool_use_override_read_redacted_real_no_injection",
 )
 
 

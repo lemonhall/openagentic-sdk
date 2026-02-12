@@ -18,6 +18,17 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_sessions_resume_two_turns_append_real_no_injection",
     # Hooks: tool rewrite behavior with real-network provider.
     "e2e_tests.e2e_hooks_pre_tool_use_rewrite_read_real_no_injection",
+    # v38: expand user-task style flows (no injection)
+    "e2e_tests.e2e_flow_glob_grep_edit_read_real_no_injection",
+    "e2e_tests.e2e_flow_list_then_read_real_no_injection",
+    "e2e_tests.e2e_flow_webfetch_example_domain_real_no_injection",
+    "e2e_tests.e2e_flow_webfetch_blocks_localhost_then_example_real_no_injection",
+    "e2e_tests.e2e_flow_resume_write_then_grep_real_no_injection",
+    "e2e_tests.e2e_flow_permission_prompt_allow_write_real_no_injection",
+    "e2e_tests.e2e_flow_ask_user_with_permission_prompt_write_real_no_injection",
+    "e2e_tests.e2e_flow_todowrite_then_read_todos_json_real_no_injection",
+    "e2e_tests.e2e_flow_read_offset_limit_numbered_real_no_injection",
+    "e2e_tests.e2e_flow_skill_missing_then_exists_real_no_injection",
 )
 
 

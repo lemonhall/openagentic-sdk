@@ -49,7 +49,23 @@ class TestE2EHooksPreToolUseRewriteReadRealNoInjection(unittest.IsolatedAsyncioT
                 saw_hook = any(
                     getattr(e, "type", None) == "hook.event" and getattr(e, "hook_point", "") == "PreToolUse" for e in r.events
                 )
-                if saw_hook and token_b in (r.final_text or ""):
+                read_uses = [
+                    e for e in r.events if getattr(e, "type", None) == "tool.use" and getattr(e, "name", None) == "Read"
+                ]
+                read_id = getattr(read_uses[-1], "tool_use_id", None) if read_uses else None
+                read_results = (
+                    [
+                        e
+                        for e in r.events
+                        if getattr(e, "type", None) == "tool.result"
+                        and getattr(e, "tool_use_id", None) == read_id
+                        and getattr(e, "is_error", False) is False
+                    ]
+                    if read_id
+                    else []
+                )
+                output_text = str(getattr(read_results[-1], "output", "") or "") if read_results else ""
+                if saw_hook and token_b in output_text:
                     return
 
             self.fail("pre_tool_use hook did not rewrite Read target as expected after 3 attempts")
@@ -57,4 +73,3 @@ class TestE2EHooksPreToolUseRewriteReadRealNoInjection(unittest.IsolatedAsyncioT
 
 if __name__ == "__main__":
     unittest.main()
-

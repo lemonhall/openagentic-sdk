@@ -79,6 +79,8 @@ def _classify_failure(stdout: str, stderr: str) -> str:
         "did not complete",
         "did not prompt",
         "did not prompt+allow",
+        "did not rewrite",
+        "did not recover",
         "did not complete the",
     )
     if any(m in blob for m in model_markers):

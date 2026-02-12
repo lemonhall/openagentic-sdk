@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 _HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b")
+_NON_SLUG_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,16 @@ def _parse_failing_tests(stdout: str, stderr: str) -> list[str]:
     return failing
 
 
+def _aggregate_failure_tests(run_results: list[RunResult]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for r in run_results:
+        if r.ok:
+            continue
+        for t in r.failing_tests:
+            counts[t] = counts.get(t, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def _run_unittest_suite(*, suite: str, timeout_s: float) -> tuple[int, float, str, str]:
     cmd = [sys.executable, "-m", "unittest", "-v", suite]
     start = time.perf_counter()
@@ -106,6 +117,14 @@ def _run_unittest_suite(*, suite: str, timeout_s: float) -> tuple[int, float, st
 def _default_report_dir() -> Path:
     root = Path.cwd()
     return root / ".openagentic_e2e_reports" / _now_utc_compact()
+
+
+def _suite_slug(suite: str) -> str:
+    s = suite.strip() or "suite"
+    s = _NON_SLUG_CHARS_RE.sub("-", s)
+    s = s.replace("/", "-").replace("\\", "-")
+    s = s.strip("-")
+    return s or "suite"
 
 
 def _write_report(dir_path: Path, *, payload: dict) -> tuple[Path, Path]:
@@ -139,6 +158,12 @@ def _write_report(dir_path: Path, *, payload: dict) -> tuple[Path, Path]:
             for t in failing_tests[:10]:
                 lines.append(f"    - `{t}`\n")
 
+    counts = payload.get("failure_test_counts") or {}
+    if isinstance(counts, dict) and counts:
+        lines.append("\n## Failing Test Frequency\n")
+        for k, v in list(counts.items())[:30]:
+            lines.append(f"- `{v}` × `{k}`\n")
+
     md_path.write_text("".join(lines), encoding="utf-8")
     return json_path, md_path
 
@@ -158,6 +183,9 @@ def main() -> int:
     min_pass_rate = min(1.0, max(0.0, float(args.min_pass_rate)))
 
     report_dir = Path(args.report_dir) if str(args.report_dir).strip() else _default_report_dir()
+    if not str(args.report_dir).strip():
+        # Avoid collisions when multiple runners execute concurrently (e.g., in parallel).
+        report_dir = report_dir.with_name(f"{report_dir.name}-{_suite_slug(suite)}-pid{os.getpid()}")
 
     run_results: list[RunResult] = []
     failures = {"network": 0, "model": 0, "regression": 0}
@@ -192,6 +220,7 @@ def main() -> int:
     passes = sum(1 for r in run_results if r.ok)
     pass_rate = passes / runs
     verdict = "pass" if pass_rate >= min_pass_rate else "fail"
+    failure_test_counts = _aggregate_failure_tests(run_results)
 
     payload = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -202,6 +231,7 @@ def main() -> int:
         "min_pass_rate": min_pass_rate,
         "verdict": verdict,
         "failures": failures,
+        "failure_test_counts": failure_test_counts,
         "env": {
             "python": sys.version.split()[0],
             "platform": platform.platform(),

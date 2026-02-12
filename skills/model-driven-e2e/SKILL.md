@@ -39,6 +39,10 @@ LLM/Agent + 真网络依赖的 E2E 是“随机系统”。本技能的核心原
 - 单次（传统）：`python -m unittest -v e2e_tests.smoke_core`
 - 模型驱动（推荐）：`python scripts/model_driven_e2e.py --suite e2e_tests.smoke_core --runs 3 --min-pass-rate 1.0`
 
+**核心用户流程（随机层，保持“活”）：**
+
+- 建议门禁：`python scripts/model_driven_e2e.py --suite e2e_tests.core_flows --runs 5 --min-pass-rate 0.8`
+
 **看报告：**
 
 - runner 默认输出到：`.openagentic_e2e_reports/<timestamp>/run_report.json` 与 `run_report.md`

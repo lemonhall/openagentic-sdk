@@ -21,7 +21,11 @@
 | `NotebookEdit` 编辑回归 | `e2e_tools_notebook_edit_roundtrip_real.py` | ✅ | 可补：多 cell/非 json 输入错误 |
 | `Glob` + `Grep` 组合 | `e2e_glob_read_write_summary_real_no_injection.py`、`e2e_tools_glob_grep_find_token_real.py` | ✅ | 可补：root 相对 cwd 的更多形态 |
 | `TodoWrite` 落盘 | `e2e_tools_todowrite_persists_real.py`、`e2e_todowrite_two_items_real_no_injection.py` | ✅ | 可补：重复 id、非法 shape |
-| `List`（opencode `list`）| （v35 将补） | ❌ | 当前缺“树输出稳定性/路径边界”用例 |
+| `List`（opencode `list`）| `e2e_tools_list_tree_output_real_injected.py`、`e2e_security_list_abs_path_rejected_real_injected.py` | ✅ | 已覆盖树输出与 abs 越界拒绝 |
+| `List`：limit/truncated | `e2e_tools_list_truncated_limit_real_injected.py` | ✅ | 覆盖默认 limit=100 的截断语义 |
+| `List`：忽略 junk dirs | `e2e_tools_list_ignores_junk_dirs_real_injected.py` | ✅ | 覆盖 `.git`/`node_modules`/`__pycache__` 忽略 |
+| `Edit`：old 不存在错误 | `e2e_tools_edit_old_not_found_errors_real_injected.py` | ✅ | 覆盖 error + 无副作用（文件不变） |
+| `Write`：content 非 string | `e2e_tools_write_content_non_string_errors_real_injected.py` | ✅ | 覆盖 error + 无副作用 + 后续恢复 |
 | `SlashCommand` 模板渲染 | 多个 slash 用例 | ✅ | 可补：unknown command / args 解析边界 |
 | `Skill` 工具执行 | `e2e_skill_tool_real.py`、`e2e_skill_tool_real_no_injection.py` 等 | ✅ | 可补：skill 链接/失败回退 |
 | `AskUserQuestion` 人类交互 | `e2e_ask_user_question_real.py`、`e2e_ask_user_write_read_pipeline_real_no_injection.py` | ✅ | 可补：ask_user + resume、ask_user 与 permissions 组合 |
@@ -33,7 +37,7 @@
 | 能力点 | 现有真网络 E2E | 状态 | 备注 / 缺口 |
 |---|---|---:|---|
 | tool error → 恢复继续 | `e2e_tool_loop_recover_read_missing_real_no_injection.py`（含 injected 版本） | ✅ | 可补：多 tool_calls 同一 turn 的顺序/稳定性 |
-| `allowed_tools` gate（ToolNotAllowed） | （v35 将补） | ❌ | 需要硬断言 ToolNotAllowed 产物与无副作用 |
+| `allowed_tools` gate（ToolNotAllowed） | `e2e_runtime_allowed_tools_gate_tool_not_allowed_real_injected.py` | ✅ | 覆盖 ToolNotAllowed + 无副作用 |
 | 单次 model 输出多 tool_calls | `e2e_tools_glob_grep_find_token_real.py`（injected） | ✅ | 继续补：混合 Read/Write/最后文本的完整链路 |
 | streaming delta 对调用方可见 | `e2e_query_emits_deltas.py` | ✅ | 需要持续确保“可见但不落盘” |
 | delta 不落入 `events.jsonl` | `e2e_sessions_events_jsonl_excludes_deltas_real_no_injection.py` | ✅ | 可补：resume 后继续不落盘 |
@@ -58,7 +62,7 @@
 | `default`：安全工具不问、危险工具问 | `e2e_perm_default_prompt_write_real_no_injection.py`、`e2e_permissions_default_prompts_edit_real_no_injection.py` | ✅ | 可补：Read/Glob/Grep 不触发 question 的硬断言 |
 | `prompt`：deny → allow | `e2e_perm_prompt_deny_then_allow_write_real_no_injection.py`（含 injected 版本） | ✅ | 已覆盖 |
 | `acceptEdits`：Edit/Write/NotebookEdit 自动放行 | `e2e_perm_accept_edits_*` | ✅ | 可补：acceptEdits 对非 edit 工具回落 prompt |
-| `callback`：外部审批逻辑 | （v35 将补） | ❌ | 需要 deterministic e2e（不依赖回答器） |
+| `callback`：外部审批逻辑 | `e2e_permissions_callback_deny_then_allow_write_real_injected.py` | ✅ | 覆盖 deterministic deny→allow |
 
 ---
 
@@ -69,6 +73,7 @@
 | before/after model call 改写/覆盖 | `e2e_hooks_before_model_call_rewrite_real.py`、`e2e_hooks_after_model_call_override_real.py` | ✅ | 已覆盖 |
 | pre tool use 改写输入 | `e2e_hooks_pre_tool_use_rewrite_read_real_no_injection.py` | ✅ | 已覆盖 |
 | post tool use 改写输出 | `e2e_hooks_post_tool_use_override_real.py` | ✅ | 可补：post tool use “block” 的错误语义 |
+| post tool use：block | `e2e_hooks_post_tool_use_block_real_injected.py` | ✅ | 覆盖 block 语义（success→error） |
 | hook blocks tool（阻断） | `e2e_runtime_hook_blocks_tool_real.py` | ✅ | 可补：block 后 resume 行为 |
 
 ---
@@ -82,5 +87,16 @@
 3) Permissions：`callback` deterministic gate  
 4) Hooks：post-tool-use block 的错误语义（硬断言）  
 
-对应计划见：`docs/plan/v35-index.md` 与 `docs/plan/v35-*.md`（新增后更新此处链接）。
+对应计划见：`docs/plan/v35-index.md` 与 `docs/plan/v35-core-e2e-coverage-matrix-and-expansion.md`。
 
+## v36 计划（继续堆 hard invariants 密度）
+
+本轮优先补齐：
+
+1) `List`：limit/truncated（默认 100）  
+2) `List`：忽略 junk dirs（`.git`/`node_modules`/`__pycache__`）  
+3) `Edit`：old-not-found 错误与无副作用  
+4) `Write`：content 类型校验与恢复  
+5) Permissions：`default` safe tools 不 prompt；`acceptEdits` 对非 edit 工具 prompt+deny  
+
+对应计划见：`docs/plan/v36-index.md` 与 `docs/plan/v36-core-hard-invariants-e2e-density.md`。

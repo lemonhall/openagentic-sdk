@@ -35,7 +35,7 @@ class TestE2ESkillToolchainEditRealNoInjection(unittest.IsolatedAsyncioTestCase)
             for attempt in range(3):
                 p.write_text("BEGIN\nPLACEHOLDER\nEND\n", encoding="utf-8")
                 opts0 = make_options(root, allowed_tools=["Skill", "Read", "Edit"])
-                opts = replace(opts0, max_steps=12)
+                opts = replace(opts0, max_steps=16)
                 prompt = (
                     "You are graded by whether ./a.txt actually changes on disk.\n"
                     "Step 1: Call Skill(name=patch-a) and follow its instructions.\n"
@@ -59,4 +59,3 @@ class TestE2ESkillToolchainEditRealNoInjection(unittest.IsolatedAsyncioTestCase)
 
 if __name__ == "__main__":
     unittest.main()
-

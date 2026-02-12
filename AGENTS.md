@@ -16,6 +16,7 @@
 - 单元测试（不含 e2e）：`python -m unittest -q`
 - e2e（真实 API、会产生费用）：`python -m unittest discover -s e2e_tests -p "e2e_*.py" -v`
 - CLI 交互式 e2e（真实网络 + 真 TTY/pty；独立套件，WSL2/Linux/macOS 运行）：`wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v'`
+- CLI e2e（Windows 原生；独立套件）：`python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v`
 - pre-commit（可选）：`pre-commit run -a`
 
 > 如果你在 WSL2 里跑 bash 命令：在 PowerShell 中显式调用 `wsl -e bash -lc '...'`，其余命令保持 PowerShell 语法。
@@ -124,6 +125,7 @@ git config --local https.proxy http://127.0.0.1:7897
 - 跑单个测试文件：`python -m unittest tests.test_cli_args -v`
 - e2e（真实 API、成本相关）：`python -m unittest discover -s e2e_tests -p "e2e_*.py" -v`
 - CLI PTY e2e（真实网络 + 真交互；不默认运行）：`python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v`（Windows 原生无 POSIX pty，建议 WSL2）
+- CLI Windows e2e（真实网络 + 真交互；不默认运行）：`python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v`
 
 ## Scope & Precedence（多份指令覆盖关系）
 

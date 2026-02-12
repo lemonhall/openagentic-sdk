@@ -131,6 +131,19 @@ git config --local https.proxy http://127.0.0.1:7897
 - CLI PTY e2e（真实网络 + 真交互；不默认运行）：`python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v`（Windows 原生无 POSIX pty，建议 WSL2）
 - CLI Windows e2e（真实网络 + 真交互/ConPTY；不默认运行）：`python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v`
 
+### 模型驱动 E2E 范式（核心 SDK 推荐）
+
+LLM/Agent + 真网络依赖的 E2E 是“随机系统”。本项目对核心模块的推荐策略是：
+
+- **硬不变量（Hard Invariants）**：协议/安全/落盘（如 `events.jsonl`）等必须 **100% 通过**；失败默认按回归处理。
+- **随机行为层（Stochastic Behaviors）**：模型规划/工具选择/自然语言等允许抖动，用**多次运行 + pass-rate 阈值 + 失败归因**做门禁。
+
+落地工具：
+
+- runner：`scripts/model_driven_e2e.py`
+- skill：`skills/model-driven-e2e/SKILL.md`
+- 研究资料（可选）：`docs/research/Model-Driven-E2E-Testing-Deep-Research.md`
+
 ## Scope & Precedence（多份指令覆盖关系）
 
 - 根目录 `AGENTS.md`：默认适用于全仓库。

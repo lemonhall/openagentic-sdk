@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .base import Tool, ToolContext
+from .path_utils import coerce_non_empty_str, resolve_tool_path
 
 
 _IGNORE_PREFIXES = (
@@ -51,13 +52,11 @@ class ListTool(Tool):
             raw = tool_input.get("dir")
         if raw is None:
             raw = tool_input.get("directory")
-        if not isinstance(raw, str) or not raw:
+        path = coerce_non_empty_str(raw)
+        if path is None:
             raise ValueError("List: 'path' must be a non-empty string")
 
-        base = Path(raw)
-        if not base.is_absolute():
-            base = Path(ctx.cwd) / base
-        base = base.resolve()
+        base = resolve_tool_path(path, ctx)
 
         if not base.exists() or not base.is_dir():
             raise FileNotFoundError(f"List: not a directory: {base}")

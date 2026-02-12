@@ -8,6 +8,12 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_sessions_resume_two_turns_append_real_no_injection",
     # User-task flow: resume across runs then grep/read evidence.
     "e2e_tests.e2e_flow_resume_write_then_grep_real_no_injection",
+    # v40: resume + prompt permission (allow).
+    "e2e_tests.e2e_flow_resume_prompt_permission_write_then_read_real_no_injection",
+    # v40: resume + prompt permission (deny then allow across runs).
+    "e2e_tests.e2e_flow_resume_prompt_permission_deny_then_allow_write_real_no_injection",
+    # v40: prune + resume still usable.
+    "e2e_tests.e2e_flow_prune_then_resume_read_small_real_no_injection",
 )
 
 
@@ -16,4 +22,3 @@ def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: 
     for mod in _FLOW_MODULES:
         suite.addTests(loader.loadTestsFromName(mod))
     return suite
-

@@ -128,7 +128,7 @@ git config --local https.proxy http://127.0.0.1:7897
 - 模型驱动 e2e（推荐：核心 smoke 的高频门禁，pass-rate + 失败归因 + 报告落盘）：
   - `python scripts/model_driven_e2e.py --suite e2e_tests.smoke_core --runs 3 --min-pass-rate 1.0`
   - 核心用户流程（随机层，允许抖动，用 pass-rate 门禁）：
-    - `python scripts/model_driven_e2e.py --suite e2e_tests.core_flows --runs 5 --min-pass-rate 0.8`
+    - `python scripts/model_driven_e2e.py --suite e2e_tests.core_flows --runs 5 --min-pass-rate 0.8 --rerun-failures 1`
   - 默认报告目录：`.openagentic_e2e_reports/<timestamp>/`（已在 `.gitignore` 忽略）
   - 方法论要点：硬不变量（协议/安全/落盘）目标 100%；随机行为层用多次运行 + 阈值管理；断言优先用 trace/tool.result/落盘，少依赖 `final_text`
 - CLI PTY e2e（真实网络 + 真交互；不默认运行）：`python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v`（Windows 原生无 POSIX pty，建议 WSL2）

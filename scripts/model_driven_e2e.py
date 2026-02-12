@@ -15,6 +15,7 @@ from pathlib import Path
 
 _HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b")
 _NON_SLUG_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_FAIL_OR_ERROR_RE = re.compile(r"^(FAIL|ERROR):\s+.+?\s+\((?P<test_id>[^)]+)\)\s*$")
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,21 @@ class RunResult:
     elapsed_s: float
     failure_kind: str | None
     failing_tests: list[str]
+    stdout_head: str
+    stdout_tail: str
+    stderr_head: str
+    stderr_tail: str
+
+
+@dataclass(frozen=True)
+class RerunResult:
+    run_index: int
+    test_id: str
+    attempt: int
+    ok: bool
+    returncode: int
+    elapsed_s: float
+    failure_kind: str | None
     stdout_head: str
     stdout_tail: str
     stderr_head: str
@@ -98,6 +114,23 @@ def _parse_failing_tests(stdout: str, stderr: str) -> list[str]:
     return failing
 
 
+def _parse_failing_test_ids(stdout: str, stderr: str) -> list[str]:
+    ids: list[str] = []
+    for line in (stdout + "\n" + stderr).splitlines():
+        m = _FAIL_OR_ERROR_RE.match(line.strip())
+        if m:
+            ids.append(m.group("test_id"))
+    # Preserve order but de-dup.
+    seen: set[str] = set()
+    out: list[str] = []
+    for tid in ids:
+        if tid in seen:
+            continue
+        seen.add(tid)
+        out.append(tid)
+    return out
+
+
 def _aggregate_failure_tests(run_results: list[RunResult]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for r in run_results:
@@ -110,6 +143,14 @@ def _aggregate_failure_tests(run_results: list[RunResult]) -> dict[str, int]:
 
 def _run_unittest_suite(*, suite: str, timeout_s: float) -> tuple[int, float, str, str]:
     cmd = [sys.executable, "-m", "unittest", "-v", suite]
+    start = time.perf_counter()
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=max(1.0, timeout_s))
+    elapsed = time.perf_counter() - start
+    return p.returncode, elapsed, p.stdout or "", p.stderr or ""
+
+
+def _run_unittest_test_id(*, test_id: str, timeout_s: float) -> tuple[int, float, str, str]:
+    cmd = [sys.executable, "-m", "unittest", "-v", test_id]
     start = time.perf_counter()
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=max(1.0, timeout_s))
     elapsed = time.perf_counter() - start
@@ -166,6 +207,29 @@ def _write_report(dir_path: Path, *, payload: dict) -> tuple[Path, Path]:
         for k, v in list(counts.items())[:30]:
             lines.append(f"- `{v}` × `{k}`\n")
 
+    reruns = payload.get("rerun_results") or []
+    if isinstance(reruns, list) and reruns:
+        lines.append("\n## Reruns (Failing Tests)\n")
+        for rr in reruns[:60]:
+            run_idx = rr.get("run_index")
+            tid = rr.get("test_id")
+            att = rr.get("attempt")
+            ok = rr.get("ok")
+            kind = rr.get("failure_kind")
+            elapsed = rr.get("elapsed_s")
+            lines.append(f"- run {run_idx} test=`{tid}` attempt=`{att}` ok=`{ok}` kind=`{kind}` elapsed_s=`{elapsed}`\n")
+
+    flake = payload.get("flake_test_counts") or {}
+    persistent = payload.get("persistent_test_counts") or {}
+    if isinstance(flake, dict) and flake:
+        lines.append("\n## Flake Summary\n")
+        for k, v in list(flake.items())[:30]:
+            lines.append(f"- flaky `{v}` × `{k}`\n")
+    if isinstance(persistent, dict) and persistent:
+        lines.append("\n## Persistent Failures\n")
+        for k, v in list(persistent.items())[:30]:
+            lines.append(f"- persistent `{v}` × `{k}`\n")
+
     md_path.write_text("".join(lines), encoding="utf-8")
     return json_path, md_path
 
@@ -176,6 +240,8 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=3, help="number of independent runs (default: 3)")
     ap.add_argument("--min-pass-rate", type=float, default=1.0, help="quality gate threshold (default: 1.0)")
     ap.add_argument("--timeout-s", type=float, default=900.0, help="per-run timeout seconds (default: 900)")
+    ap.add_argument("--rerun-failures", type=int, default=0, help="rerun failing test ids N times per failed run (default: 0)")
+    ap.add_argument("--rerun-timeout-s", type=float, default=300.0, help="per-test rerun timeout seconds (default: 300)")
     ap.add_argument("--report-dir", default="", help="directory to write reports (default: .openagentic_e2e_reports/<ts>)")
     args = ap.parse_args()
 
@@ -183,6 +249,8 @@ def main() -> int:
     suite = str(args.suite).strip()
     timeout_s = max(1.0, float(args.timeout_s))
     min_pass_rate = min(1.0, max(0.0, float(args.min_pass_rate)))
+    rerun_failures = max(0, int(args.rerun_failures))
+    rerun_timeout_s = max(1.0, float(args.rerun_timeout_s))
 
     report_dir = Path(args.report_dir) if str(args.report_dir).strip() else _default_report_dir()
     if not str(args.report_dir).strip():
@@ -190,6 +258,7 @@ def main() -> int:
         report_dir = report_dir.with_name(f"{report_dir.name}-{_suite_slug(suite)}-pid{os.getpid()}")
 
     run_results: list[RunResult] = []
+    rerun_results: list[RerunResult] = []
     failures = {"network": 0, "model": 0, "regression": 0}
 
     for i in range(1, runs + 1):
@@ -201,6 +270,32 @@ def main() -> int:
             kind = _classify_failure(out, err)
             failures[kind] += 1
             failing_tests = _parse_failing_tests(out, err)
+            if rerun_failures > 0:
+                failing_ids = _parse_failing_test_ids(out, err)
+                for test_id in failing_ids:
+                    for attempt in range(1, rerun_failures + 1):
+                        r_rc, r_elapsed, r_out, r_err = _run_unittest_test_id(test_id=test_id, timeout_s=rerun_timeout_s)
+                        r_ok = r_rc == 0
+                        r_kind: str | None = None
+                        if not r_ok:
+                            r_kind = _classify_failure(r_out, r_err)
+                        r_out_head, r_out_tail = _trim(r_out)
+                        r_err_head, r_err_tail = _trim(r_err)
+                        rerun_results.append(
+                            RerunResult(
+                                run_index=i,
+                                test_id=test_id,
+                                attempt=attempt,
+                                ok=r_ok,
+                                returncode=r_rc,
+                                elapsed_s=round(r_elapsed, 3),
+                                failure_kind=r_kind,
+                                stdout_head=r_out_head,
+                                stdout_tail=r_out_tail,
+                                stderr_head=r_err_head,
+                                stderr_tail=r_err_tail,
+                            )
+                        )
 
         out_head, out_tail = _trim(out)
         err_head, err_tail = _trim(err)
@@ -224,6 +319,18 @@ def main() -> int:
     verdict = "pass" if pass_rate >= min_pass_rate else "fail"
     failure_test_counts = _aggregate_failure_tests(run_results)
 
+    flake_test_counts: dict[str, int] = {}
+    persistent_test_counts: dict[str, int] = {}
+    if rerun_results:
+        by_key: dict[tuple[int, str], list[RerunResult]] = {}
+        for rr in rerun_results:
+            by_key.setdefault((rr.run_index, rr.test_id), []).append(rr)
+        for (_run_idx, tid), rrs in by_key.items():
+            if any(x.ok for x in rrs):
+                flake_test_counts[tid] = flake_test_counts.get(tid, 0) + 1
+            else:
+                persistent_test_counts[tid] = persistent_test_counts.get(tid, 0) + 1
+
     payload = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "suite": suite,
@@ -234,6 +341,11 @@ def main() -> int:
         "verdict": verdict,
         "failures": failures,
         "failure_test_counts": failure_test_counts,
+        "rerun_failures": rerun_failures,
+        "rerun_timeout_s": rerun_timeout_s,
+        "rerun_results": [asdict(r) for r in rerun_results],
+        "flake_test_counts": dict(sorted(flake_test_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "persistent_test_counts": dict(sorted(persistent_test_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
         "env": {
             "python": sys.version.split()[0],
             "platform": platform.platform(),

@@ -41,7 +41,7 @@ LLM/Agent + 真网络依赖的 E2E 是“随机系统”。本技能的核心原
 
 **核心用户流程（随机层，保持“活”）：**
 
-- 建议门禁：`python scripts/model_driven_e2e.py --suite e2e_tests.core_flows --runs 5 --min-pass-rate 0.8`
+- 建议门禁（失败时只复跑失败项做 triage，不改变 pass-rate 门禁口径）：`python scripts/model_driven_e2e.py --suite e2e_tests.core_flows --runs 5 --min-pass-rate 0.8 --rerun-failures 1`
 
 **看报告：**
 

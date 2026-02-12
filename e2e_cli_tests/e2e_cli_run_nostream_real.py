@@ -16,6 +16,8 @@ def _run_cli(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.C
         cwd=str(cwd),
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         timeout=240,
     )
@@ -32,6 +34,8 @@ class TestCliRunNoStreamReal(unittest.TestCase):
 
             env = dict(os.environ)
             env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONUTF8"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONPATH"] = str(root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             env["OPENAGENTIC_SDK_HOME"] = str(home_dir)
             env["OPENCODE_TEST_HOME"] = str(home_dir)
@@ -56,4 +60,3 @@ class TestCliRunNoStreamReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

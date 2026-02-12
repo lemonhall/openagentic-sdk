@@ -11,8 +11,8 @@
 > 实施策略说明（v24 现实约束）：
 >
 > - Windows 原生的“真 TTY/ConPTY 驱动”在纯 stdlib 环境下存在较高不确定性与排障成本；
-> - v24 首先交付一套 **Windows 原生、在线、可回归** 的 CLI e2e（基于 stdio pipes 驱动），优先把 CLI + SDK + Provider 的真实链路跑通；
-> - ConPTY harness 作为后续加强项保留在套件内（实验性），在找到稳定 attach/读写模型后再升级为默认驱动。
+> - v24 交付一套 **Windows 原生、在线、可回归** 的 CLI e2e，默认以 ConPTY（真 TTY）驱动覆盖更真实的终端语义；
+> - stdio pipes 驱动保留为对照/降级路径，用于排障与降低偶发性。
 
 ## Non-Goals
 
@@ -36,8 +36,8 @@
 - 可写入输入（包含 `\r\n`、ESC 序列）
 - 可读取输出并支持 `read_until()` 超时断言
 
-并提供 Windows 稳定驱动（本版默认）：
-- 基于 stdio pipes 的驱动，可稳定运行 `openagentic_cli chat` 并进行交互断言（在线、真实网络）。
+并提供 Windows 对照/降级驱动：
+- 基于 stdio pipes 的驱动，用于对照排障与临时降级（在线、真实网络）。
 
 ### REQ-0024-003 — `OA_PERMISSION_MODE=bypass` does not show auto-approve startup prompt (TTY)
 

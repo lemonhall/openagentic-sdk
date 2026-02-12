@@ -1,12 +1,12 @@
-# v24 Plan — Windows 11 CLI E2E（Windows 原生交互式 e2e；ConPTY 作为后续加强）
+# v24 Plan — Windows 11 CLI E2E（Windows 原生交互式 e2e；ConPTY/真 TTY 为默认驱动）
 
 ## Goal
 
 建立 `e2e_cli_win_tests/`：在 Windows 原生环境下端到端验证 `openagentic_cli` 的交互命令与真实网络调用。
 
 交付顺序：
-- **Phase 1（v24）**：stdio pipes 驱动（稳定、可回归，作为默认测试驱动）
-- **Phase 2（后续版本）**：ConPTY（Pseudo Console）驱动（目标：真 TTY/VT 语义）
+- **Phase 1（v24）**：ConPTY（Pseudo Console / 真 TTY）驱动（默认；覆盖 VT input、回显、粘贴模式等真实终端语义）
+- **Phase 2（对照/降级）**：stdio pipes 驱动（必要时用于对照排障与临时降级）
 
 ## PRD Trace
 
@@ -20,10 +20,10 @@
 
 做：
 - Windows e2e suite（独立、隔离、opt-in）
-- 最小 e2e：bypass 无启动 prompt、/help、/exit（默认 pipes 驱动）
+- 最小 e2e：bypass 无启动 prompt、/help、/exit（默认 ConPTY 驱动）
 - 多行输入 e2e：/paste 与 bracketed paste markers
 - 运行隔离：`OPENAGENTIC_SDK_HOME` / `OPENCODE_TEST_HOME` / `XDG_CONFIG_HOME`
-- ConPTY harness（实验性保留在套件内；不作为 v24 完成门槛）
+- stdio pipes harness（保留在套件内；用于对照/排障/临时降级）
 
 不做：
 - 不支持 Windows 10
@@ -42,11 +42,11 @@
 ## Evidence（填写为可复现证据）
 
 - Date: 2026-02-12
-- `python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v` → OK（Ran 2 tests）
+- `python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v` → OK（Ran 6 tests）
 
 ## Steps（Strict）
 
 1) Red：先写 Windows e2e（会失败）
-2) Green：补齐 pipes 驱动 + 交互断言（/help /exit /paste）
+2) Green：补齐 ConPTY 驱动 + 交互断言（/help /exit /paste / typeahead）
 3) Verify：跑全套并写回 Evidence
-4) Delta：更新 `docs/plan/v24-index.md`（记录 ConPTY 延后原因与下一步）
+4) Delta：更新 `docs/plan/v24-index.md`（记录驱动策略变更与下一步）

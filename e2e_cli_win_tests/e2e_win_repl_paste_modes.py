@@ -6,7 +6,7 @@ import time
 import unittest
 import uuid
 
-from e2e_cli_win_tests._pipes import PipeProcess
+from e2e_cli_win_tests._conpty import ConPtyProcess, conpty_available
 from e2e_cli_win_tests._harness import repo_root, require_env, temp_project_dir
 
 _BP_START = "\x1b[200~"
@@ -14,8 +14,9 @@ _BP_END = "\x1b[201~"
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only")
+@unittest.skipUnless(conpty_available(), "ConPTY not available")
 class TestWinReplPasteModes(unittest.TestCase):
-    def _wait_for_prompt(self, p: PipeProcess, *, timeout_s: float) -> None:
+    def _wait_for_prompt(self, p: ConPtyProcess, *, timeout_s: float) -> None:
         deadline = time.time() + max(0.1, float(timeout_s))
         last_exc: Exception | None = None
         while time.time() < deadline:
@@ -49,7 +50,7 @@ class TestWinReplPasteModes(unittest.TestCase):
             env["PYTHONUTF8"] = "1"
             env["PYTHONIOENCODING"] = "utf-8"
 
-            p = PipeProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
+            p = ConPtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
                 self._wait_for_prompt(p, timeout_s=30.0)
 

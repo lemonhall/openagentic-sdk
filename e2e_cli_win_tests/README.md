@@ -5,9 +5,9 @@
 - CLI 的交互命令（`/help`、`/exit`、`/paste` 等）
 - 与真实 Provider 的真实网络调用（凭据来自仓库根目录 `.env` 或当前环境变量）
 
-当前默认驱动方式为 **stdio pipes**（见 `e2e_cli_win_tests/_pipes.py`），因为这条路径在 Windows 上更稳定、可复现。
+当前默认驱动方式为 **ConPTY（Pseudo Console / 真 TTY）**（见 `e2e_cli_win_tests/_conpty.py`），用于更真实地覆盖交互式 CLI（光标定位、回显、VT 序列、粘贴模式等）。
 
-> 说明：`e2e_cli_win_tests/_conpty.py` 是 ConPTY（Pseudo Console）的实验性 harness，用于未来把 Windows 侧也升级为“真 TTY”测试；目前尚未作为默认测试驱动。
+如遇 ConPTY 相关问题，可临时切回 **stdio pipes**（见 `e2e_cli_win_tests/_pipes.py`）做对照排查。
 
 ## 运行方式
 

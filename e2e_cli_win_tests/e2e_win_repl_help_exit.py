@@ -5,13 +5,14 @@ import sys
 import time
 import unittest
 
-from e2e_cli_win_tests._pipes import PipeProcess
+from e2e_cli_win_tests._conpty import ConPtyProcess, conpty_available
 from e2e_cli_win_tests._harness import repo_root, require_env, temp_project_dir
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only")
+@unittest.skipUnless(conpty_available(), "ConPTY not available")
 class TestWinReplHelpExit(unittest.TestCase):
-    def _wait_for_prompt(self, p: PipeProcess, *, timeout_s: float) -> str:
+    def _wait_for_prompt(self, p: ConPtyProcess, *, timeout_s: float) -> str:
         deadline = time.time() + max(0.1, float(timeout_s))
         last_exc: Exception | None = None
         while time.time() < deadline:
@@ -44,7 +45,7 @@ class TestWinReplHelpExit(unittest.TestCase):
             env["PYTHONUTF8"] = "1"
             env["PYTHONIOENCODING"] = "utf-8"
 
-            p = PipeProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
+            p = ConPtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
                 out0 = self._wait_for_prompt(p, timeout_s=30.0)
                 self.assertNotIn("Auto-approve Write/Edit/Bash", out0)

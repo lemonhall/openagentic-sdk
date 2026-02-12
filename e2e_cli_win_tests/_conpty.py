@@ -104,8 +104,10 @@ DeleteProcThreadAttributeList.restype = None
 
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
+CREATE_NEW_CONSOLE = 0x00000010
 
 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
+STARTF_USESTDHANDLES = 0x00000100
 
 
 class STARTUPINFOW(ctypes.Structure):
@@ -240,6 +242,7 @@ class ConPtyProcess:
 
         si = STARTUPINFOEXW()
         si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
+        si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES
         si.lpAttributeList = ctypes.cast(attr_buf, ctypes.c_void_p)
         pi = PROCESS_INFORMATION()
 
@@ -251,7 +254,7 @@ class ConPtyProcess:
             ctypes.create_unicode_buffer(cmdline),
             None,
             None,
-            True,
+            False,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
             env_block,
             cwd,
@@ -262,6 +265,7 @@ class ConPtyProcess:
 
         self._proc = pi
         self._buf = ""
+        self._term_tail = b""
 
         # Close the ends we handed to the pseudoconsole. The pseudoconsole takes ownership, but
         # we keep them alive until after CreateProcessW returns to avoid premature teardown.
@@ -306,8 +310,24 @@ class ConPtyProcess:
                 return ""
             if got.value <= 0:
                 return ""
-            return bytes(buf[: got.value]).decode("utf-8", errors="replace")
+            raw = bytes(buf[: got.value])
+            self._maybe_respond_to_terminal_queries(raw)
+            return raw.decode("utf-8", errors="replace")
         return ""
+
+    def _maybe_respond_to_terminal_queries(self, raw: bytes) -> None:
+        # Some interactive CLIs emit VT queries (e.g. CPR/DSR) and block waiting for a reply from the "terminal".
+        # Under ConPTY, our harness *is* the terminal, so we must answer a minimal subset.
+        view = self._term_tail + raw
+        try:
+            if b"\x1b[6n" in view or b"\x1b[?6n" in view:
+                self.send("\x1b[1;1R")
+            if b"\x1b[c" in view or b"\x1b[>c" in view:
+                # Minimal device attributes response (xterm-ish). Keep it conservative.
+                self.send("\x1b[?1;0c")
+        except Exception:
+            pass
+        self._term_tail = view[-16:]
 
     def read_until(self, pattern: str | Pattern[str], *, timeout_s: float = 30.0, strip_ansi_codes: bool = True) -> str:
         if isinstance(pattern, str):

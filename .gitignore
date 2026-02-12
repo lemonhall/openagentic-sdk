@@ -24,6 +24,9 @@ coverage.xml
 # Sessions
 .openagentic-sdk
 
+# Model-driven e2e runner reports
+.openagentic_e2e_reports/
+
 # Local secrets (do not commit)
 .env
 

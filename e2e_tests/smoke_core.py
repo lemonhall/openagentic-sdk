@@ -12,6 +12,8 @@ _SMOKE_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_sessions_events_jsonl_excludes_deltas_real_no_injection",
     # Sessions: same resume id works across two runs (append-only).
     "e2e_tests.e2e_sessions_resume_two_turns_append_real_no_injection",
+    # Sessions + permissions: permission prompt persists and resume keeps working.
+    "e2e_tests.e2e_sessions_resume_permission_prompt_write_then_read_real_no_injection",
     # Permissions: default mode prompts then allows.
     "e2e_tests.e2e_perm_default_prompt_write_real_no_injection",
     # Permissions: prompt mode deny then allow.
@@ -32,4 +34,3 @@ def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: 
     for mod in _SMOKE_MODULES:
         suite.addTests(loader.loadTestsFromName(mod))
     return suite
-

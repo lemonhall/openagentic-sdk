@@ -6,6 +6,8 @@ import unittest
 _FLOW_MODULES: tuple[str, ...] = (
     # Human-in-the-loop: ask user → use answer → persist to disk.
     "e2e_tests.e2e_ask_user_write_read_pipeline_real_no_injection",
+    # Metamorphic: prompt variants preserve ask→write→read evidence.
+    "e2e_tests.e2e_metamorphic_ask_user_write_read_variants_real_no_injection",
     # Skills: skill-defined workflow across multiple tools.
     "e2e_tests.e2e_workflow_skill_write_glob_grep_edit_read_real_no_injection",
     # Tools: edit roundtrip on disk.
@@ -24,4 +26,3 @@ def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: 
     for mod in _FLOW_MODULES:
         suite.addTests(loader.loadTestsFromName(mod))
     return suite
-

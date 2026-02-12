@@ -64,6 +64,16 @@ runner 的默认归因口径（可扩展）：
 3) `tool.use` / `tool.result`（结构化字段与 error_type）
 4) 最后才用 `final_text`（尽量只做确认性信号）
 
+## Metamorphic / 关系断言（随机层推荐）
+
+当输出没有唯一正确文本（对话/规划/执行链路）时，用“关系必须成立”替代“输出必须完全一致”：
+
+- **Prompt 变体不变性**：同一意图的 2–3 个 prompt 变体，应产生同一组硬证据（tool.result / 落盘 / events）。
+- **规范化等价**：等价路径（如 `./a/../b` vs `./b`）在允许/拒绝与落盘行为上应一致（适合安全/工具语义）。
+- **上下文扩展单调性**：追加无关上下文，不应导致越权工具调用（适合权限/安全边界）。
+
+本仓库示例（core_flows）：`e2e_tests/e2e_metamorphic_ask_user_write_read_variants_real_no_injection.py`
+
 ## Common Mistakes
 
 - 把 flaky 当作“测试写得不够死”，越写越复杂反而更脆

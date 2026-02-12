@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import re
@@ -11,6 +12,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 _HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b")
@@ -184,6 +186,11 @@ def _write_report(dir_path: Path, *, payload: dict) -> tuple[Path, Path]:
     lines.append(f"- Passes: `{payload.get('passes')}`\n")
     lines.append(f"- Pass rate: `{payload.get('pass_rate')}`\n")
     lines.append(f"- Verdict: `{payload.get('verdict')}`\n")
+
+    required_passes = payload.get("required_passes")
+    allowed_failures = payload.get("allowed_failures")
+    if required_passes is not None and allowed_failures is not None:
+        lines.append(f"- Gate budget: required_passes=`{required_passes}` allowed_failures=`{allowed_failures}`\n")
     lines.append("\n## Failure Breakdown\n")
     for k in ("network", "model", "regression"):
         lines.append(f"- {k}: `{payload.get('failures', {}).get(k, 0)}`\n")
@@ -234,6 +241,54 @@ def _write_report(dir_path: Path, *, payload: dict) -> tuple[Path, Path]:
     return json_path, md_path
 
 
+def _iter_report_jsons(history_dir: Path) -> list[Path]:
+    if not history_dir.exists() or not history_dir.is_dir():
+        return []
+    out: list[Path] = []
+    for p in history_dir.rglob("run_report.json"):
+        if p.is_file():
+            out.append(p)
+    return out
+
+
+def _safe_json_load(path: Path) -> dict[str, Any] | None:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(obj, dict):
+        return obj
+    return None
+
+
+def _load_history(*, history_dir: Path, suite: str, limit: int) -> list[dict[str, Any]]:
+    paths = _iter_report_jsons(history_dir)
+    items: list[dict[str, Any]] = []
+    for p in paths:
+        obj = _safe_json_load(p)
+        if not obj:
+            continue
+        if obj.get("suite") != suite:
+            continue
+        ts = obj.get("timestamp_utc")
+        if not isinstance(ts, str):
+            continue
+        items.append(
+            {
+                "timestamp_utc": ts,
+                "suite": suite,
+                "runs": obj.get("runs"),
+                "passes": obj.get("passes"),
+                "pass_rate": obj.get("pass_rate"),
+                "verdict": obj.get("verdict"),
+                "failures": obj.get("failures"),
+                "report_path": str(p),
+            }
+        )
+    items.sort(key=lambda x: str(x.get("timestamp_utc") or ""), reverse=True)
+    return items[: max(0, int(limit))]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Model-driven E2E runner (pass-rate gate + failure triage).")
     ap.add_argument("--suite", default="e2e_tests.smoke_core", help="unittest module name (default: e2e_tests.smoke_core)")
@@ -242,6 +297,8 @@ def main() -> int:
     ap.add_argument("--timeout-s", type=float, default=900.0, help="per-run timeout seconds (default: 900)")
     ap.add_argument("--rerun-failures", type=int, default=0, help="rerun failing test ids N times per failed run (default: 0)")
     ap.add_argument("--rerun-timeout-s", type=float, default=300.0, help="per-test rerun timeout seconds (default: 300)")
+    ap.add_argument("--include-history", action="store_true", help="include recent pass-rate history for this suite in the report")
+    ap.add_argument("--history-limit", type=int, default=10, help="history items to include when --include-history (default: 10)")
     ap.add_argument("--report-dir", default="", help="directory to write reports (default: .openagentic_e2e_reports/<ts>)")
     args = ap.parse_args()
 
@@ -251,6 +308,8 @@ def main() -> int:
     min_pass_rate = min(1.0, max(0.0, float(args.min_pass_rate)))
     rerun_failures = max(0, int(args.rerun_failures))
     rerun_timeout_s = max(1.0, float(args.rerun_timeout_s))
+    include_history = bool(args.include_history)
+    history_limit = max(0, int(args.history_limit))
 
     report_dir = Path(args.report_dir) if str(args.report_dir).strip() else _default_report_dir()
     if not str(args.report_dir).strip():
@@ -318,6 +377,8 @@ def main() -> int:
     pass_rate = passes / runs
     verdict = "pass" if pass_rate >= min_pass_rate else "fail"
     failure_test_counts = _aggregate_failure_tests(run_results)
+    required_passes = min(runs, max(0, int(math.ceil(min_pass_rate * runs))))
+    allowed_failures = max(0, runs - required_passes)
 
     flake_test_counts: dict[str, int] = {}
     persistent_test_counts: dict[str, int] = {}
@@ -338,6 +399,8 @@ def main() -> int:
         "passes": passes,
         "pass_rate": round(pass_rate, 4),
         "min_pass_rate": min_pass_rate,
+        "required_passes": required_passes,
+        "allowed_failures": allowed_failures,
         "verdict": verdict,
         "failures": failures,
         "failure_test_counts": failure_test_counts,
@@ -355,11 +418,14 @@ def main() -> int:
         },
         "run_results": [asdict(r) for r in run_results],
     }
+    if include_history:
+        payload["history"] = _load_history(history_dir=Path.cwd() / ".openagentic_e2e_reports", suite=suite, limit=history_limit)
 
     json_path, md_path = _write_report(report_dir, payload=payload)
 
     print(f"Suite: {suite}")
     print(f"Runs: {runs}  Passes: {passes}  Pass rate: {pass_rate:.3f}  Gate: >= {min_pass_rate:.3f}  Verdict: {verdict}")
+    print(f"Gate budget: required_passes={required_passes} allowed_failures={allowed_failures}")
     print(f"Failures: network={failures['network']} model={failures['model']} regression={failures['regression']}")
     print(f"Report: {json_path}")
     print(f"Report: {md_path}")

@@ -286,9 +286,6 @@ async def run_chat_impl(
                 @kb.add("$")  # type: ignore[misc]
                 def _dollar_opens_menu(event) -> None:  # noqa: ANN001
                     buf = event.app.current_buffer
-                    if buf.document.text_before_cursor != "":
-                        buf.insert_text("$")
-                        return
                     buf.insert_text("$")
                     if skill_completer is not None:
                         buf.start_completion(select_first=False)

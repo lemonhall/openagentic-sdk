@@ -8,7 +8,10 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class CachedReview:
+    review_id: str
     session_id: str
+    scope: str
+    selection: str
     review_markdown: str
     model: str
     analyzed_at: int
@@ -40,6 +43,19 @@ class CacheDb:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reviews (
+                    review_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    selection TEXT NOT NULL,
+                    review_markdown TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    analyzed_at INTEGER NOT NULL
+                )
+                """
+            )
             conn.commit()
 
     def get_review(self, session_id: str) -> CachedReview | None:
@@ -52,7 +68,10 @@ class CacheDb:
             if row is None:
                 return None
             return CachedReview(
+                review_id=str(row["session_id"]),
                 session_id=str(row["session_id"]),
+                scope="session",
+                selection="all",
                 review_markdown=str(row["review_markdown"]),
                 model=str(row["model"]),
                 analyzed_at=int(row["analyzed_at"]),
@@ -75,3 +94,44 @@ class CacheDb:
             )
             conn.commit()
 
+    def get_review_scoped(self, *, session_id: str, scope: str, selection: str) -> CachedReview | None:
+        self.ensure_schema()
+        review_id = f"{session_id}:{scope}:{selection}"
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT review_id, session_id, scope, selection, review_markdown, model, analyzed_at
+                FROM reviews
+                WHERE review_id=?
+                """,
+                (review_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return CachedReview(
+                review_id=str(row["review_id"]),
+                session_id=str(row["session_id"]),
+                scope=str(row["scope"]),
+                selection=str(row["selection"]),
+                review_markdown=str(row["review_markdown"]),
+                model=str(row["model"]),
+                analyzed_at=int(row["analyzed_at"]),
+            )
+
+    def upsert_review_scoped(self, *, session_id: str, scope: str, selection: str, review_markdown: str, model: str) -> None:
+        self.ensure_schema()
+        review_id = f"{session_id}:{scope}:{selection}"
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO reviews (review_id, session_id, scope, selection, review_markdown, model, analyzed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(review_id) DO UPDATE SET
+                    review_markdown=excluded.review_markdown,
+                    model=excluded.model,
+                    analyzed_at=excluded.analyzed_at
+                """,
+                (review_id, session_id, scope, selection, review_markdown, model, now),
+            )
+            conn.commit()

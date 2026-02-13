@@ -21,9 +21,6 @@ def load_rollout_messages(path: str) -> list[dict[str, Any]]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                # Support both:
-                # - plain chat jsonl: {role, content}
-                # - Codex CLI sessions jsonl: {timestamp, type, payload}
                 msgs = _coerce_messages(obj)
                 if msgs:
                     out.extend(msgs)
@@ -49,7 +46,7 @@ def _coerce_messages(obj: Any) -> list[dict[str, Any]]:
         if isinstance(role, str) and isinstance(content, str):
             return [{"role": role, "content": content}]
 
-    # Some transcripts use "text" field
+    # Some transcripts use "text" field.
     role = obj.get("role")
     text = obj.get("text")
     if isinstance(role, str) and isinstance(text, str):
@@ -59,14 +56,13 @@ def _coerce_messages(obj: Any) -> list[dict[str, Any]]:
     typ = obj.get("type")
     payload = obj.get("payload")
     if isinstance(typ, str) and isinstance(payload, dict):
-        # Messages.
         if typ == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
             content = payload.get("content")
             text2 = _extract_text_from_content(content)
             if isinstance(role, str) and text2:
                 return [{"role": role, "content": text2}]
-        # Tool calls / outputs (show as tool role).
+
         if typ == "response_item" and payload.get("type") in ("function_call", "function_call_output"):
             name = payload.get("name")
             if isinstance(name, str) and name:
@@ -101,3 +97,4 @@ def _short(obj: Any, limit: int = 200) -> str:
         s = str(obj)
     s = s.replace("\n", " ").strip()
     return s if len(s) <= limit else (s[:limit] + "…")
+

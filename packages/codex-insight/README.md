@@ -19,7 +19,7 @@ codex-insight
 如需启用 AI Review（按 `r` 生成 review），需要先把本仓库的核心 SDK 装进同一个虚拟环境：
 
 ```powershell
-uv pip install -e .
+uv pip install -p .\.venv\Scripts\python.exe -e ..\..
 ```
 
 如果你只想先跑纯浏览（无 AI / 无缓存 DB），也可只装最小依赖：

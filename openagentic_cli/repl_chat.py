@@ -293,6 +293,14 @@ async def run_chat_impl(
                     if skill_completer is not None:
                         buf.start_completion(select_first=False)
 
+                @kb.add("enter", eager=True)  # type: ignore[misc]
+                def _enter_accepts_menu_item_without_submitting(event) -> None:  # noqa: ANN001
+                    buf = event.app.current_buffer
+                    if buf.complete_state is not None and buf.complete_state.current_completion is not None:
+                        buf.apply_completion(buf.complete_state.current_completion)
+                        return
+                    buf.validate_and_handle()
+
                 slash_kb = kb
 
             bottom_toolbar_enabled = os.getenv("OA_CLI_BOTTOM_TOOLBAR", "1").strip().lower() not in (
@@ -322,7 +330,7 @@ async def run_chat_impl(
                     "completer": completer,
                     "key_bindings": slash_kb,
                     "complete_while_typing": False,
-                    "reserve_space_for_menu": 6 if slash_menu_enabled else 0,
+                    "reserve_space_for_menu": 6 if (slash_menu_enabled or skills_menu_enabled) else 0,
                     "handle_sigint": False,
                 }
                 if bottom_toolbar_enabled:

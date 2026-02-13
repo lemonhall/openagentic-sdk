@@ -58,11 +58,11 @@ class TestCliReplLongSessionReal(unittest.TestCase):
             p = PtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
                 p.read_until("Type /help for commands.", timeout_s=20.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 p.send("只回复 CLI_E2E_OK（不要加引号，不要调用任何工具）\n")
                 p.read_until("CLI_E2E_OK", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 sid = _wait_for_single_session_id(home_dir, timeout_s=5.0)
                 self.assertTrue(sid, "expected exactly one session dir under OPENAGENTIC_SDK_HOME")
@@ -72,14 +72,14 @@ class TestCliReplLongSessionReal(unittest.TestCase):
 
                 p.send("只回复 CLI_E2E_OK2（不要加引号，不要调用任何工具）\n")
                 p.read_until("CLI_E2E_OK2", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
                 self.assertEqual(_find_single_session_id(home_dir), sid)
                 c2 = _count_lines(events_path)
                 self.assertGreater(c2, c1)
 
                 p.send("只回复 CLI_E2E_OK3（不要加引号，不要调用任何工具）\n")
                 p.read_until("CLI_E2E_OK3", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
                 self.assertEqual(_find_single_session_id(home_dir), sid)
                 c3 = _count_lines(events_path)
                 self.assertGreater(c3, c2)

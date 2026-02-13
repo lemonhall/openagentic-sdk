@@ -51,7 +51,7 @@ class TestWinCtrlCDuringResponseReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 p.sendline(turn1)
                 # Try to interrupt almost immediately while generation is still in-flight.
@@ -59,11 +59,11 @@ class TestWinCtrlCDuringResponseReal(unittest.TestCase):
                 p.send("\x03")
 
                 # We may see an explicit "interrupted" line, but the real invariant is: we get back to the prompt.
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline(turn2)
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline("/exit")
                 self.assertEqual(p.expect([EOF, TIMEOUT], timeout=30.0), 0)
@@ -80,4 +80,3 @@ class TestWinCtrlCDuringResponseReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

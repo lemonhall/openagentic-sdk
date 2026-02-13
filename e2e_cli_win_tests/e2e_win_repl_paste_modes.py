@@ -48,7 +48,7 @@ class TestWinReplPasteModes(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 # /paste mode: multi-line content should be treated as one prompt.
                 token1 = f"WIN_PASTE_OK_{uuid.uuid4().hex}_END"
@@ -57,7 +57,7 @@ class TestWinReplPasteModes(unittest.TestCase):
                 p.send(f"请严格只回复：{token1}\r\n第一行\r\n\r\n/this_is_not_a_command\r\n/end\r\n")
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
                 self.assertNotIn("Commands:", p.before)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 session_id = wait_for_single_session_id(home_dir, timeout_s=5.0)
                 events1 = read_events_jsonl(home_dir, session_id)
@@ -80,7 +80,7 @@ class TestWinReplPasteModes(unittest.TestCase):
 
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
                 self.assertNotIn("Commands:", p.before)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 deadline = time.time() + 5.0
                 events2 = read_events_jsonl(home_dir, session_id)

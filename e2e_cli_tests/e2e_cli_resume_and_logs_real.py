@@ -51,16 +51,16 @@ class TestCliResumeAndLogsReal(unittest.TestCase):
             # Create a session.
             p1 = PtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
-                p1.read_until("oa> ", timeout_s=20.0)
+                p1.read_until("oa>", timeout_s=20.0)
                 p1.send("只回复 CLI_E2E_SESS（不要加引号）\n")
                 p1.read_until("CLI_E2E_SESS", timeout_s=90.0)
-                p1.read_until("oa> ", timeout_s=20.0)
+                p1.read_until("oa>", timeout_s=20.0)
                 sid = _wait_for_single_session_id(home_dir, timeout_s=5.0)
                 self.assertTrue(sid, "expected exactly one session dir under OPENAGENTIC_SDK_HOME")
                 events_path = home_dir / "sessions" / sid / "events.jsonl"
                 before_lines = len(events_path.read_text(encoding="utf-8", errors="replace").splitlines()) if events_path.exists() else 0
                 self.assertGreater(before_lines, 0)
-                p1.read_until("oa> ", timeout_s=20.0)
+                p1.read_until("oa>", timeout_s=20.0)
                 p1.send("/exit\n")
                 _ = p1.close(timeout_s=10.0)
             finally:
@@ -84,14 +84,14 @@ class TestCliResumeAndLogsReal(unittest.TestCase):
             # Resume the session.
             p3 = PtyProcess([sys.executable, "-m", "openagentic_cli", "resume", sid], cwd=str(project_dir), env=env)
             try:
-                p3.read_until("oa> ", timeout_s=20.0)
+                p3.read_until("oa>", timeout_s=20.0)
                 p3.send("只回复 CLI_E2E_RESUME（不要加引号）\n")
                 p3.read_until("CLI_E2E_RESUME", timeout_s=90.0)
-                p3.read_until("oa> ", timeout_s=20.0)
+                p3.read_until("oa>", timeout_s=20.0)
                 self.assertEqual(_find_single_session_id(home_dir), sid)
                 after_lines = len(events_path.read_text(encoding="utf-8", errors="replace").splitlines()) if events_path.exists() else 0
                 self.assertGreater(after_lines, before_lines)
-                p3.read_until("oa> ", timeout_s=20.0)
+                p3.read_until("oa>", timeout_s=20.0)
                 p3.send("/exit\n")
                 _ = p3.close(timeout_s=10.0)
             finally:

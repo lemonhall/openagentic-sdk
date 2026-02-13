@@ -47,15 +47,15 @@ class TestWinCtrlCIdleReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 # Ctrl+C at idle should not become prompt text or a user.message.
                 p.send("\x03")
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=15.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=15.0), 0)
 
                 p.sendline(turn1)
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline("/exit")
                 self.assertEqual(p.expect([EOF, TIMEOUT], timeout=30.0), 0)
@@ -73,4 +73,3 @@ class TestWinCtrlCIdleReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

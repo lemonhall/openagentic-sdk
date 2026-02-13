@@ -33,7 +33,7 @@ class TestWinReplHelpExit(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
                 self.assertNotIn("Auto-approve Write/Edit/Bash", p.before)
 
                 p.sendline("/help")

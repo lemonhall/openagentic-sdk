@@ -70,13 +70,13 @@ class TestCliReplNewSessionReal(unittest.TestCase):
 
             p = PtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 # First turn -> first session.
                 token1 = f"CLI_E2E_NEW1_{uuid.uuid4().hex}"
                 p.send(f"只回复 {token1}（不要加引号，不要调用任何工具）\n")
                 p.read_until(token1, timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 ids1 = _wait_for_session_count(home_dir, 1, timeout_s=8.0)
                 self.assertEqual(len(ids1), 1)
@@ -88,13 +88,13 @@ class TestCliReplNewSessionReal(unittest.TestCase):
                 # /new should reset the session context.
                 p.send("/new\n")
                 p.read_until("started new session", timeout_s=20.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 # Second turn -> second session directory created.
                 token2 = f"CLI_E2E_NEW2_{uuid.uuid4().hex}"
                 p.send(f"只回复 {token2}（不要加引号，不要调用任何工具）\n")
                 p.read_until(token2, timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 ids2 = _wait_for_session_count(home_dir, 2, timeout_s=8.0)
                 self.assertEqual(len(ids2), 2)

@@ -50,11 +50,11 @@ class TestWinBackspaceInputSequenceReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 p.sendline(turn1)
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.send(typed)
                 # DEL (0x7f) is what many terminals send for Backspace in VT mode.
@@ -63,7 +63,7 @@ class TestWinBackspaceInputSequenceReal(unittest.TestCase):
                 p.send("\r\n")
 
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline("/exit")
                 self.assertEqual(p.expect([EOF, TIMEOUT], timeout=30.0), 0)
@@ -81,4 +81,3 @@ class TestWinBackspaceInputSequenceReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

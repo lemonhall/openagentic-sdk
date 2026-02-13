@@ -53,7 +53,7 @@ class TestWinTypeaheadWithoutEnterReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 p.sendline(turn1)
 
@@ -63,14 +63,14 @@ class TestWinTypeaheadWithoutEnterReal(unittest.TestCase):
 
                 # Wait for Turn1 to finish.
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 # Now press Enter only. If the typed line was preserved in the input buffer,
                 # it should become the next user.message turn.
                 p.send("\r\n")
 
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline("/exit")
                 self.assertEqual(p.expect([EOF, TIMEOUT], timeout=30.0), 0)
@@ -88,4 +88,3 @@ class TestWinTypeaheadWithoutEnterReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

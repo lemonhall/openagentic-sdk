@@ -93,6 +93,9 @@ class TestCliReplMultilinePaste(unittest.TestCase):
         self.assertTrue(turn.is_manual_paste)
 
     def test_read_turn_tty_buffered_multiline_coalesces_without_markers(self) -> None:
+        if os.name == "nt":
+            raise unittest.SkipTest("buffered coalescing heuristic is POSIX-only")
+
         from openagentic_cli.repl import read_repl_turn
 
         rfd, wfd = os.pipe()
@@ -124,7 +127,11 @@ class TestCliReplMultilinePaste(unittest.TestCase):
 
     def test_disable_posix_echoctl_clears_echoctl_and_restores(self) -> None:
         import openagentic_cli.repl as repl
-        import termios
+
+        if os.name == "nt":
+            raise unittest.SkipTest("termios is not available on Windows")
+
+        import termios  # noqa: PLC0415
 
         if not hasattr(repl, "_disable_posix_echoctl"):
             self.fail("missing _disable_posix_echoctl")
@@ -160,6 +167,7 @@ class TestCliReplMultilinePaste(unittest.TestCase):
 
         import openagentic_cli.repl as repl
         from openagentic_sdk.options import OpenAgenticOptions
+        from openagentic_sdk.permissions.gate import PermissionGate
 
         if not hasattr(repl, "_disable_posix_echoctl"):
             self.fail("missing _disable_posix_echoctl")
@@ -190,11 +198,20 @@ class TestCliReplMultilinePaste(unittest.TestCase):
 
         stdin = _FakeTty(["n\n"])
         stdout = _FakeTty([])
-        opts = OpenAgenticOptions(provider=_FakeProvider(), model="fake", cwd=os.getcwd())
+        opts = OpenAgenticOptions(
+            provider=_FakeProvider(),
+            model="fake",
+            cwd=os.getcwd(),
+            permission_gate=PermissionGate(permission_mode="default"),
+            setting_sources=[],
+        )
 
         restore = mock.Mock()
         with mock.patch.object(repl, "_disable_posix_echoctl", return_value=restore):  # type: ignore[attr-defined]
-            rc = asyncio.run(repl.run_chat(opts, color_config=repl.StyleConfig(color="never"), debug=False, stdin=stdin, stdout=stdout))
+            with mock.patch.dict(os.environ, {"OA_CLI_AUTOAPPROVE_PROMPT": "1"}, clear=False):
+                rc = asyncio.run(
+                    repl.run_chat(opts, color_config=repl.StyleConfig(color="never"), debug=False, stdin=stdin, stdout=stdout)
+                )
         self.assertEqual(rc, 0)
         restore.assert_called_once()
 

@@ -69,12 +69,12 @@ class TestCliReplPasteModesReal(unittest.TestCase):
 
             p = PtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 # Ensure a session exists and we have an events file to inspect.
                 p.send("只回复 CLI_E2E_PASTE_BOOT（不要加引号，不要调用任何工具）\n")
                 p.read_until("CLI_E2E_PASTE_BOOT", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 sid = _wait_for_single_session_id(home_dir, timeout_s=8.0)
                 self.assertTrue(sid)
@@ -90,7 +90,7 @@ class TestCliReplPasteModesReal(unittest.TestCase):
                 p.send(line1 + "\n" + line2 + "\n/end\n")
 
                 p.read_until("CLI_E2E_PASTE_OK", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 after_msgs = _user_messages(events)
                 self.assertEqual(len(after_msgs), len(before_msgs) + 1)
@@ -105,7 +105,7 @@ class TestCliReplPasteModesReal(unittest.TestCase):
                 p.send(_BP_END + "\n")
 
                 p.read_until("CLI_E2E_BP_OK", timeout_s=90.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 final_msgs = _user_messages(events)
                 self.assertEqual(len(final_msgs), len(after_msgs) + 1)
@@ -119,4 +119,3 @@ class TestCliReplPasteModesReal(unittest.TestCase):
                     p.close(timeout_s=2.0)
                 except Exception:
                     pass
-

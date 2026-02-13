@@ -49,7 +49,7 @@ class TestWinSpecialKeysDoNotPolluteInputReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 p.send(base)
                 # Left then right arrow: should be a no-op for the final input line.
@@ -59,7 +59,7 @@ class TestWinSpecialKeysDoNotPolluteInputReal(unittest.TestCase):
                 p.send("\r\n")
 
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=60.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
                 p.sendline("/exit")
                 self.assertEqual(p.expect([EOF, TIMEOUT], timeout=30.0), 0)
@@ -77,4 +77,3 @@ class TestWinSpecialKeysDoNotPolluteInputReal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

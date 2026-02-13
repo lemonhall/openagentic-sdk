@@ -16,8 +16,8 @@ from e2e_cli_win_tests._harness import (
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only")
-class TestWinTypeaheadTurnsReal(unittest.TestCase):
-    def test_typeahead_does_not_merge_two_lines_into_one_turn(self) -> None:
+class TestWinArrowKeysEditingReal(unittest.TestCase):
+    def test_left_right_arrow_keys_allow_midline_editing(self) -> None:
         require_env("RIGHTCODE_API_KEY")
         ensure_conpty_expect_on_syspath()
         from conpty_expect._win_conpty import conpty_available  # noqa: PLC0415
@@ -27,15 +27,18 @@ class TestWinTypeaheadTurnsReal(unittest.TestCase):
             raise unittest.SkipTest("ConPTY not available")
 
         token = uuid.uuid4().hex
-        turn1 = f"Turn1 ({token}): Reply with exactly the word ONE."
-        turn2 = f"Turn2 ({token}): Reply with exactly the word TWO."
-        turn3 = f"Turn3 ({token}): Reply with exactly the word THREE."
+        turn1 = f"ARROW_INIT({token}): Reply with exactly the word ONE."
+
+        typed = f"ARROW_EDIT({token}): Reply with exactly the word OK. SUFFIX abcd"
+        expected = f"ARROW_EDIT({token}): Reply with exactly the word OK. SUFFIX abZcd"
 
         root = repo_root()
         with temp_project_dir() as td:
             project_dir = td / "project"
             home_dir = td / "home"
             env = build_base_env(root=root, home_dir=home_dir)
+            env["OA_CLI_INPUT_BACKEND"] = "prompt_toolkit"
+            env.pop("NO_COLOR", None)
 
             p = spawn(
                 [sys.executable, "-m", "openagentic_cli", "chat"],
@@ -49,14 +52,14 @@ class TestWinTypeaheadTurnsReal(unittest.TestCase):
 
                 p.sendline(turn1)
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
-                # Simulate "typeahead": the user enters two separate lines quickly.
-                # These must be processed as two distinct turns, not merged into one.
-                p.send(f"{turn2}\r\n{turn3}\r\n")
+                # Type the next turn, then move cursor left twice and insert "Z".
+                p.send(typed)
+                p.send("\x1b[D")
+                p.send("\x1b[D")
+                p.send("Z")
+                p.send("\r\n")
 
-                self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
-                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
                 self.assertEqual(p.expect(["• Done", TIMEOUT, EOF], timeout=180.0), 0)
                 self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=60.0), 0)
 
@@ -71,9 +74,8 @@ class TestWinTypeaheadTurnsReal(unittest.TestCase):
             texts = [str(e.get("text", "")) for e in events if e.get("type") == "user.message"]
 
             self.assertIn(turn1, texts)
-            self.assertIn(turn2, texts)
-            self.assertIn(turn3, texts)
-            self.assertNotIn(f"{turn2}\n{turn3}", texts)
+            self.assertIn(expected, texts)
+            self.assertFalse(any("\x1b" in t for t in texts), "unexpected ESC sequence leaked into user.message")
 
 
 if __name__ == "__main__":

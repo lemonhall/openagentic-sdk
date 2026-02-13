@@ -48,7 +48,7 @@ class TestWinTypeaheadDuringResponseReal(unittest.TestCase):
                 strip_ansi_codes=True,
             )
             try:
-                self.assertEqual(p.expect(["oa> ", TIMEOUT, EOF], timeout=30.0), 0)
+                self.assertEqual(p.expect(["oa>", TIMEOUT, EOF], timeout=30.0), 0)
 
                 p.sendline(turn1)
                 # Simulate the user typing ahead while the assistant is still responding.

@@ -30,7 +30,7 @@ class TestCliReplHelpExitTty(unittest.TestCase):
             p = PtyProcess([sys.executable, "-m", "openagentic_cli", "chat"], cwd=str(project_dir), env=env)
             try:
                 p.read_until("Type /help for commands.", timeout_s=20.0)
-                p.read_until("oa> ", timeout_s=20.0)
+                p.read_until("oa>", timeout_s=20.0)
 
                 p.send("/help\n")
                 out = p.read_until("Commands:", timeout_s=20.0)

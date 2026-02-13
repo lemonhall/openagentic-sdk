@@ -7,64 +7,10 @@ from collections.abc import Callable
 from typing import TextIO
 
 from .types import _BP_END, _BP_START, _VT_KEY_SEQ_RE, ReplTurn
+from .win_ctrl_c import _install_windows_ctrl_c_handler, _windows_ctrl_c_consume, _windows_ctrl_c_peek
 
 _WIN_RAW_ENABLED = False
-_WIN_CTRL_C_PRESSED = None
-_WIN_CTRL_C_HANDLER_INSTALLED = False
-_WIN_CTRL_C_HANDLER = None
 _WIN_PENDING_CHARS: deque[str] = deque()
-
-
-def _windows_ctrl_c_consume() -> bool:
-    global _WIN_CTRL_C_PRESSED
-    if os.name != "nt":
-        return False
-    if _WIN_CTRL_C_PRESSED is None:
-        return False
-    if _WIN_CTRL_C_PRESSED.is_set():
-        _WIN_CTRL_C_PRESSED.clear()
-        return True
-    return False
-
-
-def _windows_ctrl_c_peek() -> bool:
-    if os.name != "nt":
-        return False
-    if _WIN_CTRL_C_PRESSED is None:
-        return False
-    return bool(_WIN_CTRL_C_PRESSED.is_set())
-
-
-def _install_windows_ctrl_c_handler() -> None:
-    global _WIN_CTRL_C_HANDLER_INSTALLED, _WIN_CTRL_C_HANDLER, _WIN_CTRL_C_PRESSED
-
-    if os.name != "nt":
-        return
-    if _WIN_CTRL_C_HANDLER_INSTALLED:
-        return
-
-    import ctypes
-    import threading
-    from ctypes import wintypes
-
-    _WIN_CTRL_C_PRESSED = threading.Event()
-
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-
-    # https://learn.microsoft.com/windows/console/handlerroutine
-    HANDLER = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
-    CTRL_C_EVENT = 0
-
-    def _handler(ctrl_type: int) -> int:
-        if ctrl_type == CTRL_C_EVENT:
-            assert _WIN_CTRL_C_PRESSED is not None
-            _WIN_CTRL_C_PRESSED.set()
-            return 1
-        return 0
-
-    _WIN_CTRL_C_HANDLER = HANDLER(_handler)
-    kernel32.SetConsoleCtrlHandler(_WIN_CTRL_C_HANDLER, True)
-    _WIN_CTRL_C_HANDLER_INSTALLED = True
 
 
 def _enable_windows_vt_input(stdin: TextIO) -> Callable[[], None] | None:

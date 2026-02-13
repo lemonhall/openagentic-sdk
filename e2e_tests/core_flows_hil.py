@@ -30,6 +30,9 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_flow_perm_default_write_denied_real_no_injection",
     # v47: hook rewrite cannot escape project root (Write traversal blocked).
     "e2e_tests.e2e_flow_hooks_pre_tool_use_rewrite_write_traversal_blocked_real_no_injection",
+    # v50: permissions negative paths (prompt/callback).
+    "e2e_tests.e2e_flow_permissions_prompt_no_answerer_denies_real_no_injection",
+    "e2e_tests.e2e_flow_permissions_callback_approver_raises_denies_real_no_injection",
 )
 
 

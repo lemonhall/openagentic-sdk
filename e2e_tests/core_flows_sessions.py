@@ -22,6 +22,8 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_flow_sessions_events_exclude_assistant_delta_real_no_injection",
     # v49: resume fails clearly on corrupt events.jsonl.
     "e2e_tests.e2e_flow_resume_corrupt_events_log_fails_clearly_real_no_injection",
+    # v50: acceptEdits still prompts/denies on non-edit tools.
+    "e2e_tests.e2e_flow_permissions_accept_edits_read_prompts_and_denies_real_no_injection",
 )
 
 

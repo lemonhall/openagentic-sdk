@@ -216,28 +216,14 @@ async def run_chat_impl(
 
             _print(stdout, dim("Type /help for commands.", enabled=enable_color))
 
-            ptk_style = (
-                Style.from_dict(
-                    {
-                        # Avoid setting a global background color: Prompt Toolkit clears/redraws the
-                        # prompt area, and a non-default background can make the frame appear to
-                        # "fill" the rest of the screen.
-                        "prompt": "fg:#ffffff bold",
-                        "frame.border": "#a0a0a0",
-                    }
-                )
-                if enable_color
-                else None
-            )
+            # Keep Prompt Toolkit usage minimal and aligned with upstream docs:
+            # - Only enable a frame and color its border (no global background).
+            ptk_style = Style.from_dict({"frame.border": "#a0a0a0"}) if enable_color else None
 
             def _ptk_prompt_kwargs(*, paste_mode: bool = False) -> dict[str, object]:
                 kwargs: dict[str, object] = {
                     "message": ("paste> " if paste_mode else "oa> "),
                     "show_frame": True,
-                    # Let the input wrap/expand naturally as it grows.
-                    "wrap_lines": True,
-                    # Avoid reserving extra blank space for a completion menu (we don't use one).
-                    "reserve_space_for_menu": 0,
                     "handle_sigint": False,
                 }
                 if ptk_style is not None:

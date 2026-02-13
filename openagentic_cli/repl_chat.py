@@ -168,8 +168,10 @@ async def run_chat_impl(
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).
         from prompt_toolkit import PromptSession  # noqa: PLC0415
+        from prompt_toolkit.completion import WordCompleter  # noqa: PLC0415
         from prompt_toolkit.cursor_shapes import CursorShape  # noqa: PLC0415
         from prompt_toolkit.input.defaults import create_input  # noqa: PLC0415
+        from prompt_toolkit.key_binding import KeyBindings  # noqa: PLC0415
         from prompt_toolkit.output.defaults import create_output  # noqa: PLC0415
         from prompt_toolkit.patch_stdout import patch_stdout  # noqa: PLC0415
 
@@ -210,6 +212,51 @@ async def run_chat_impl(
 
             _print(stdout, dim("Type /help for commands.", enabled=enable_color))
 
+            slash_menu_enabled = os.getenv("OA_CLI_SLASH_MENU", "1").strip().lower() not in (
+                "0",
+                "false",
+                "no",
+                "off",
+            )
+
+            slash_commands = [
+                "/help",
+                "/exit",
+                "/new",
+                "/interrupt",
+                "/debug",
+                "/skills",
+                "/skill",
+                "/cmd",
+                "/paste",
+            ]
+
+            slash_command_completer = (
+                WordCompleter(
+                    slash_commands,
+                    ignore_case=True,
+                    # Show a menu with all commands when the user typed only `/`.
+                    match_middle=False,
+                )
+                if slash_menu_enabled
+                else None
+            )
+
+            slash_kb = None
+            if slash_menu_enabled:
+                kb = KeyBindings()
+
+                @kb.add("/")  # type: ignore[misc]
+                def _slash_opens_menu(event) -> None:  # noqa: ANN001
+                    buf = event.app.current_buffer
+                    if buf.document.text_before_cursor != "":
+                        buf.insert_text("/")
+                        return
+                    buf.insert_text("/")
+                    buf.start_completion(select_first=False)
+
+                slash_kb = kb
+
             bottom_toolbar_enabled = os.getenv("OA_CLI_BOTTOM_TOOLBAR", "1").strip().lower() not in (
                 "0",
                 "false",
@@ -234,6 +281,10 @@ async def run_chat_impl(
                     # extend down to the bottom of the viewport. Keep input UX stable and minimal.
                     "wrap_lines": True,
                     "cursor": CursorShape.BLINKING_BEAM,
+                    "completer": slash_command_completer,
+                    "key_bindings": slash_kb,
+                    "complete_while_typing": False,
+                    "reserve_space_for_menu": 6 if slash_menu_enabled else 0,
                     "handle_sigint": False,
                 }
                 if bottom_toolbar_enabled:

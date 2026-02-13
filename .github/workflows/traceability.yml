@@ -13,6 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install package (editable)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
       - name: E2E suite ↔ docs/plan traceability
         run: python scripts/e2e_trace_check.py
-
+      - name: Offline E2E (hard invariants)
+        run: python -m unittest discover -s e2e_tests_offline -p "e2e_*.py" -v

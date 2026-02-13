@@ -16,12 +16,12 @@ _SMOKE_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_sessions_resume_permission_prompt_write_then_read_real_no_injection",
     # Permissions: default mode prompts then allows.
     "e2e_tests.e2e_perm_default_prompt_write_real_no_injection",
-    # Permissions: prompt mode deny then allow.
-    "e2e_tests.e2e_perm_prompt_deny_then_allow_write_real_no_injection",
+    # Permissions: prompt mode deny then allow (injected, more deterministic).
+    "e2e_tests.e2e_perm_prompt_deny_then_allow_write_real_injected",
     # Permissions: acceptEdits auto-allows Write without prompting.
     "e2e_tests.e2e_perm_accept_edits_write_real_no_injection",
     # Tool loop recovery after an expected tool error.
-    "e2e_tests.e2e_tool_loop_recover_read_missing_real_no_injection",
+    "e2e_tests.e2e_tool_loop_recover_read_missing_real_injected",
     # Security boundary: reject absolute path outside project.
     "e2e_tests.e2e_security_abs_path_rejected_real_no_injection",
     # Tools: overwrite=false behavior.

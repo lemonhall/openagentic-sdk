@@ -21,7 +21,7 @@ def make_options_offline(
     mcp_servers: Mapping[str, Any] | None = None,
     agents: Mapping[str, AgentDefinition] | None = None,
 ) -> OpenAgenticOptions:
-    store = FileSessionStore(root_dir=root / "sessions")
+    store = FileSessionStore(root_dir=root)
     opts = OpenAgenticOptions(
         provider=provider,
         model=model,

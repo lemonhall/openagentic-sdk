@@ -15,6 +15,7 @@
   - 只修你改动的文件：`ruff check path/to/file.py --config ruff.toml --fix`
 - 单元测试（不含 e2e）：`python -m unittest -q`
 - e2e（真实 API、会产生费用）：`python -m unittest discover -s e2e_tests -p "e2e_*.py" -v`
+- E2E 追溯检查（suite ↔ docs/plan）：`python scripts/e2e_trace_check.py`
 - CLI 交互式 e2e（真实网络 + 真 TTY/pty；独立套件，WSL2/Linux/macOS 运行）：`wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v'`
 - CLI e2e（Windows 原生；ConPTY 真 TTY；独立套件）：`python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v`
 - `oa chat` 输入后端（v52 起默认 Prompt Toolkit；可回退；依赖 `prompt_toolkit>=3.0.52`）：`$env:OA_CLI_INPUT_BACKEND='prompt_toolkit'`（legacy：`$env:OA_CLI_INPUT_BACKEND='legacy'`）

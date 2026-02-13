@@ -6,6 +6,9 @@ import unittest
 _FLOW_MODULES: tuple[str, ...] = (
     # Tools: edit roundtrip on disk.
     "e2e_tests.e2e_tools_edit_roundtrip_real_no_injection",
+    # Metamorphic: edit variants preserve invariants.
+    "e2e_tests.e2e_metamorphic_edit_variants_real_no_injection",
+    "e2e_tests.e2e_metamorphic_perm_default_edit_variants_real_no_injection",
     # User-task flows (tools).
     "e2e_tests.e2e_flow_glob_grep_edit_read_real_no_injection",
     "e2e_tests.e2e_flow_list_then_read_real_no_injection",

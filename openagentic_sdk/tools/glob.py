@@ -17,7 +17,10 @@ class GlobTool(Tool):
         if not isinstance(pattern, str) or not pattern:
             raise ValueError("Glob: 'pattern' must be a non-empty string")
         root = tool_input.get("root", tool_input.get("path"))
-        base = Path(ctx.cwd) if root is None else Path(str(root))
+        base = Path(ctx.cwd)
+        if root is not None:
+            p = Path(str(root))
+            base = p if p.is_absolute() else (base / p)
         matches = [str(p) for p in sorted(base.glob(pattern))]
         return {
             "root": str(base),

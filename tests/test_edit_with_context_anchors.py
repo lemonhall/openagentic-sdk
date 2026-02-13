@@ -27,7 +27,20 @@ class TestEditAnchors(unittest.TestCase):
             self.assertIn("replacements", out)
             self.assertEqual(p.read_text(encoding="utf-8"), "aaa\nOK\nbbb\n")
 
+    def test_edit_treats_empty_before_after_as_unset(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "a.txt"
+            p.write_text("aaa\nTARGET\nbbb\n", encoding="utf-8")
+            tool = EditTool()
+
+            out = tool.run_sync(
+                {"file_path": str(p), "old": "TARGET", "new": "OK", "before": "", "after": ""},
+                ToolContext(cwd=str(root)),
+            )
+            self.assertIn("replacements", out)
+            self.assertEqual(p.read_text(encoding="utf-8"), "aaa\nOK\nbbb\n")
+
 
 if __name__ == "__main__":
     unittest.main()
-

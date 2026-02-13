@@ -115,8 +115,8 @@ class TestSlashCommandPartsParity(unittest.IsolatedAsyncioTestCase):
                 content = payload.get("content")
                 if not isinstance(content, str):
                     raise AssertionError("expected string content")
-                if "call the Task tool with subagent: worker" not in content:
-                    raise AssertionError("expected task instruction for agent reference")
+                if "call the Task tool with subagent: worker" in content:
+                    raise AssertionError("expected no synthetic task instruction for agent reference")
 
                 return ModelOutput(assistant_text="ok", tool_calls=(), usage={"total_tokens": 2})
 

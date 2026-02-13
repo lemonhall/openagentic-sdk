@@ -57,8 +57,9 @@ class TestUserSlashCommandExecution(unittest.IsolatedAsyncioTestCase):
             content = user_msgs[-1].get("content")
             self.assertIsInstance(content, str)
             self.assertIn("Hello world", content)
-            self.assertIn("Called the Read tool", content)
             self.assertIn("filedata", content)
+            self.assertNotIn("Called the Read tool", content)
+            self.assertNotIn("Called the list tool", content)
 
 
 if __name__ == "__main__":

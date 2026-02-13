@@ -26,7 +26,11 @@ class TestE2EHooks(unittest.IsolatedAsyncioTestCase):
                 tool_input = payload.get("tool_input")
                 if not isinstance(tool_input, dict):
                     return HookDecision()
-                fp = tool_input.get("file_path", tool_input.get("filePath"))
+                fp = tool_input.get("file_path")
+                if isinstance(fp, str) and not fp.strip():
+                    fp = None
+                if fp is None:
+                    fp = tool_input.get("filePath")
                 if not isinstance(fp, str) or not fp.endswith("a.txt"):
                     return HookDecision()
                 updated = dict(tool_input)
@@ -52,4 +56,3 @@ class TestE2EHooks(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

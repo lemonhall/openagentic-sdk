@@ -67,7 +67,10 @@ class PermissionGate:
         if mode == "callback":
             if self.approver is None:
                 return ApprovalResult(False)
-            allowed = await self.approver(tool_name, tool_input, context)
+            try:
+                allowed = await self.approver(tool_name, tool_input, context)
+            except Exception as e:  # noqa: BLE001
+                return ApprovalResult(False, deny_message=f"permission callback error: {e}")
             return ApprovalResult(bool(allowed))
 
         if mode == "prompt":

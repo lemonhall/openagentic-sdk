@@ -37,6 +37,14 @@ class CompactionOptions:
     # Product-level cap on output tokens reserved from the context window.
     global_output_cap: int = 4096
 
+    # OpenCode parity: reserve this many output tokens from the usable input
+    # window. If unset, we derive it as min(20_000, max_output_tokens).
+    reserved: int | None = None
+
+    # OpenCode parity: some models specify a distinct input limit; when set we
+    # prefer it over `context_limit` for overflow math.
+    input_limit: int | None = None
+
     # Soft compaction: keep this many estimated tool-output tokens unpruned.
     protect_tool_output_tokens: int = 40_000
 

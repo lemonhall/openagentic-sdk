@@ -10,9 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from ..events import Event, SessionCheckpoint, SessionRedo, SessionSetHead, SessionUndo
+from ..events import AssistantDelta, Event, SessionCheckpoint, SessionRedo, SessionSetHead, SessionUndo
 from ..serialization import event_to_dict, loads_event
 from .paths import events_path, meta_path, session_dir, transcript_path
+from .errors import CorruptSessionLogError
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +144,9 @@ class FileSessionStore:
         return new_id
 
     def append_event(self, session_id: str, event: Event) -> None:
+        # Never persist streaming deltas; they can balloon session files to GBs.
+        if isinstance(event, AssistantDelta):
+            return
         # Validate session id before path usage.
         _ = self.session_dir(session_id)
         with self._session_lock(session_id):
@@ -188,10 +192,17 @@ class FileSessionStore:
         if not path.exists():
             return []
         out: list[Event] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            raise CorruptSessionLogError(session_id=session_id, path=path, reason=str(e)) from e
+        for i, line in enumerate(text.splitlines(), start=1):
             if not line.strip():
                 continue
-            out.append(loads_event(line))
+            try:
+                out.append(loads_event(line))
+            except Exception as e:  # noqa: BLE001
+                raise CorruptSessionLogError(session_id=session_id, path=path, line=i, reason=str(e)) from e
         return out
 
     def append_events(self, session_id: str, events: Iterable[Event]) -> None:
@@ -226,15 +237,24 @@ class FileSessionStore:
             return 0
         last_seq: int | None = None
         # Read from the end in a simple, safe way (small files expected for v0.1).
-        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            raise CorruptSessionLogError(session_id=session_id, path=path, reason=str(e)) from e
+        lines = text.splitlines()
+        for idx, line in enumerate(reversed(lines), start=1):
             if not line.strip():
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
-                break
+                # If the last non-empty line is corrupt, fail fast instead of silently
+                # falling back to a guessed sequence.
+                bad_line_no = max(1, len(lines) - idx + 1)
+                raise CorruptSessionLogError(session_id=session_id, path=path, line=bad_line_no, reason="invalid JSON") from None
             if not isinstance(obj, dict):
-                break
+                bad_line_no = max(1, len(lines) - idx + 1)
+                raise CorruptSessionLogError(session_id=session_id, path=path, line=bad_line_no, reason="event must be a JSON object")
             seq = obj.get("seq")
             if isinstance(seq, int):
                 last_seq = seq
@@ -242,4 +262,4 @@ class FileSessionStore:
         if last_seq is not None:
             return last_seq
         # Back-compat: older logs without seq fields.
-        return len([ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()])
+        return len([ln for ln in lines if ln.strip()])

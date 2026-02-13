@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .base import Tool, ToolContext
+from .path_utils import coerce_non_empty_str, resolve_tool_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,13 +14,19 @@ class EditTool(Tool):
     description: str = "Apply a precise edit (string replace) to a file."
 
     async def run(self, tool_input: Mapping[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        file_path = tool_input.get("file_path", tool_input.get("filePath"))
+        file_path = coerce_non_empty_str(tool_input.get("file_path")) or coerce_non_empty_str(tool_input.get("filePath"))
         old = tool_input.get("old", tool_input.get("old_string", tool_input.get("oldString")))
         new = tool_input.get("new", tool_input.get("new_string", tool_input.get("newString")))
         replace_all = tool_input.get("replace_all", tool_input.get("replaceAll"))
         count = tool_input.get("count", 1 if not replace_all else 0)
         before = tool_input.get("before")
         after = tool_input.get("after")
+
+        # Models/providers sometimes emit empty-string context anchors. Treat them as "not provided".
+        if isinstance(before, str) and before.strip() == "":
+            before = None
+        if isinstance(after, str) and after.strip() == "":
+            after = None
 
         if not isinstance(file_path, str) or not file_path:
             raise ValueError("Edit: 'file_path' must be a non-empty string")
@@ -34,9 +41,7 @@ class EditTool(Tool):
         if after is not None and not isinstance(after, str):
             raise ValueError("Edit: 'after' must be a string")
 
-        p = Path(file_path)
-        if not p.is_absolute():
-            p = Path(ctx.cwd) / p
+        p = resolve_tool_path(file_path, ctx)
 
         text = p.read_text(encoding="utf-8", errors="replace")
         if old not in text:

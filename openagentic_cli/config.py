@@ -138,6 +138,8 @@ def build_options(
             auto=bool(comp_cfg.get("auto", compaction.auto)),
             prune=bool(comp_cfg.get("prune", compaction.prune)),
             context_limit=int(comp_cfg.get("context_limit", compaction.context_limit) or 0),
+            reserved=(int(comp_cfg.get("reserved")) if isinstance(comp_cfg.get("reserved"), int) else None),
+            input_limit=(int(comp_cfg.get("input_limit")) if isinstance(comp_cfg.get("input_limit"), int) else None),
         )
 
     # Plugins (OpenCode parity): merge plugin-provided hooks/tools.
@@ -281,20 +283,31 @@ def build_options(
             lim = m.get("limit") if isinstance(m, dict) else None
             if isinstance(lim, dict):
                 ctx_limit = int(lim.get("context") or 0)
+                inp_limit_raw = lim.get("input")
+                inp_limit = int(inp_limit_raw or 0) if isinstance(inp_limit_raw, int) else 0
                 out_limit = int(lim.get("output") or 0)
                 new_context_limit = compaction.context_limit
+                new_input_limit = compaction.input_limit
                 new_output_limit = compaction.output_limit
                 if int(new_context_limit or 0) <= 0 and ctx_limit > 0:
                     new_context_limit = ctx_limit
                 if new_output_limit is None and out_limit > 0:
                     new_output_limit = out_limit
-                if new_context_limit != compaction.context_limit or new_output_limit != compaction.output_limit:
+                if new_input_limit is None and inp_limit > 0:
+                    new_input_limit = inp_limit
+                if (
+                    new_context_limit != compaction.context_limit
+                    or new_output_limit != compaction.output_limit
+                    or new_input_limit != compaction.input_limit
+                ):
                     compaction = CompactionOptions(
                         auto=compaction.auto,
                         prune=compaction.prune,
                         context_limit=int(new_context_limit or 0),
                         output_limit=new_output_limit,
                         global_output_cap=compaction.global_output_cap,
+                        reserved=compaction.reserved,
+                        input_limit=new_input_limit,
                         protect_tool_output_tokens=compaction.protect_tool_output_tokens,
                         min_prune_tokens=compaction.min_prune_tokens,
                     )

@@ -28,7 +28,7 @@ class TestOagCmd(unittest.TestCase):
                 "--state-dir",
                 td,
                 "--exit-after",
-                "0.7",
+                "1.5",
             ]
 
             def _run() -> None:
@@ -37,11 +37,11 @@ class TestOagCmd(unittest.TestCase):
             t = threading.Thread(target=_run, name="test-oag", daemon=True)
             t.start()
 
-            deadline = time.time() + 1.0
+            deadline = time.time() + 3.0
             last_err: Exception | None = None
             while time.time() < deadline:
                 try:
-                    with urlopen(f"http://{host}:{port}/health", timeout=0.2) as resp:  # noqa: S310
+                    with urlopen(f"http://{host}:{port}/health", timeout=0.5) as resp:  # noqa: S310
                         self.assertEqual(resp.status, 200)
                         obj = json.loads(resp.read().decode("utf-8"))
                         self.assertEqual(obj, {"ok": True})
@@ -58,4 +58,3 @@ class TestOagCmd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

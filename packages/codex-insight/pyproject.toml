@@ -1,0 +1,43 @@
+[project]
+name = "codex-insight"
+version = "0.1.0"
+description = "AI-assisted session insight dashboard (Textual TUI) for Codex CLI sessions"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "codex-insight contributors" }]
+keywords = ["codex", "tui", "textual", "session", "dashboard", "insight"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "textual>=0.60.0",
+]
+
+[project.optional-dependencies]
+ai = []
+db = [
+  "aiosqlite>=0.20.0",
+]
+all = [
+  "aiosqlite>=0.20.0",
+]
+
+[project.scripts]
+codex-insight = "codex_insight.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["codex_insight*"]

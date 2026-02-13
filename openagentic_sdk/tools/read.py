@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .base import Tool, ToolContext
+from .path_utils import coerce_non_empty_str, resolve_tool_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,13 +16,11 @@ class ReadTool(Tool):
     max_bytes: int = 1024 * 1024
 
     async def run(self, tool_input: Mapping[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        file_path = tool_input.get("file_path", tool_input.get("filePath"))
+        file_path = coerce_non_empty_str(tool_input.get("file_path")) or coerce_non_empty_str(tool_input.get("filePath"))
         if not isinstance(file_path, str) or not file_path:
             raise ValueError("Read: 'file_path' must be a non-empty string")
 
-        p = Path(file_path)
-        if not p.is_absolute():
-            p = Path(ctx.cwd) / p
+        p = resolve_tool_path(file_path, ctx)
 
         offset_raw = tool_input.get("offset")
         limit_raw = tool_input.get("limit")

@@ -33,6 +33,11 @@ _FLOW_MODULES: tuple[str, ...] = (
     # v50: permissions negative paths (prompt/callback).
     "e2e_tests.e2e_flow_permissions_prompt_no_answerer_denies_real_no_injection",
     "e2e_tests.e2e_flow_permissions_callback_approver_raises_denies_real_no_injection",
+    # v51: permissions CAS + interactive branches.
+    "e2e_tests.e2e_flow_permissions_cas_rewrite_write_target_real_no_injection",
+    "e2e_tests.e2e_flow_permissions_cas_deny_message_real_no_injection",
+    "e2e_tests.e2e_flow_permissions_prompt_interactive_denies_real_no_injection",
+    "e2e_tests.e2e_flow_permissions_prompt_interactive_allows_write_real_no_injection",
 )
 
 

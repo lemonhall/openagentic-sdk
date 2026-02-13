@@ -12,10 +12,12 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
-from textual.widgets import DataTable, Markdown, Static
+from textual.widgets import DataTable, Input, Markdown, Static
 from textual.worker import Worker, WorkerState
 
 from ..ai.reviewer import ReviewResult, review_turns_stream
+from ..ai.workbench import get_or_create_workbench_oa_session_id, load_workbench_transcript, workbench_chat_stream
+from ..ai.workbench_tools import WorkbenchSnapshot
 from ..config import InsightConfig
 from ..db.cache_db import CacheDb
 from ..db.codex_db import CodexDb
@@ -47,6 +49,23 @@ class SessionDetailScreen(Screen[None]):
         width: 1fr;
         border-left: solid $panel;
     }
+
+    SessionDetailScreen #right_scroll {
+        height: 1fr;
+    }
+
+    SessionDetailScreen #chat_title {
+        margin-top: 1;
+    }
+
+    SessionDetailScreen #chat_body {
+        padding: 0 1;
+        height: auto;
+    }
+
+    SessionDetailScreen #chat_input {
+        border-top: solid $panel;
+    }
     """
 
     BINDINGS = [
@@ -54,6 +73,8 @@ class SessionDetailScreen(Screen[None]):
         ("c", "toggle_collapse_user", "折叠/展开"),
         ("t", "toggle_context", "含/不含上下文"),
         ("m", "toggle_monitor", "监控最新"),
+        ("i", "focus_chat", "输入对话"),
+        ("ctrl+k", "cancel_chat", "取消对话"),
         Binding("up", "nav_up", "", show=False),
         Binding("down", "nav_down", "", show=False),
         ("enter", "open_turn_detail", "详情"),
@@ -93,6 +114,17 @@ class SessionDetailScreen(Screen[None]):
         self._review_last_render_monotonic: float = 0.0
         self._review_last_delta_monotonic: float | None = None
 
+        self._workbench_oa_session_id: str | None = None
+        self._chat_messages: list[tuple[str, str]] = []
+        self._chat_worker: Worker[object] | None = None
+        self._chat_abort_event: threading.Event | None = None
+        self._chat_delta_queue: queue.SimpleQueue[str] | None = None
+        self._chat_timer: Timer | None = None
+        self._chat_stream_text: str = ""
+        self._chat_started_monotonic: float | None = None
+        self._chat_last_render_monotonic: float = 0.0
+        self._chat_last_user_text: str = ""
+
         self._monitor_enabled = False
         self._monitor_timer: Timer | None = None
         self._monitor_interval_s = 5.0
@@ -111,16 +143,23 @@ class SessionDetailScreen(Screen[None]):
                 yield table
                 with VerticalScroll(id="turn_detail_scroll"):
                     yield Static("", id="turn_detail", markup=False)
-            with VerticalScroll(id="review"):
-                yield Static("AI Review（按 r 生成，走 openagentic-sdk）", id="review_title")
-                yield Static("监控：OFF（m 开关；5s 轮询；稳定 2 次后自动评审最新 turn）", id="monitor_status")
-                yield Markdown(_KEY_HELP_MD.strip() + "\n", id="key_help")
-                yield Markdown("进入这里后再按需生成 review，并缓存到本地。", id="review_body")
+            with Vertical(id="review"):
+                with VerticalScroll(id="right_scroll"):
+                    yield Static("AI Review（按 r 生成，走 openagentic-sdk）", id="review_title")
+                    yield Static("监控：OFF（m 开关；5s 轮询；稳定 2 次后自动评审最新 turn）", id="monitor_status")
+                    yield Markdown(_KEY_HELP_MD.strip() + "\n", id="key_help")
+                    yield Markdown("进入这里后再按需生成 review，并缓存到本地。", id="review_body")
+
+                    yield Static("工作台对话（基于当前 session + review 多轮迭代）", id="chat_title")
+                    yield Static("提示：按 i 聚焦输入框；回车发送；Ctrl+K 取消生成。", id="chat_hint")
+                    yield Static("", id="chat_body", markup=False)
+                yield Input(placeholder="工作台：继续聊这份 session/review…", id="chat_input")
 
     def on_mount(self) -> None:
         self._refresh_detail()
         self._focus_turns_table()
         self._update_monitor_status()
+        self._load_workbench_transcript_if_any()
 
     def on_show(self) -> None:
         # Ensure arrow-key navigation feels "terminal-native" without needing mouse focus.
@@ -131,6 +170,9 @@ class SessionDetailScreen(Screen[None]):
         if self._review_timer is not None:
             self._review_timer.stop()
             self._review_timer = None
+        if self._chat_timer is not None:
+            self._chat_timer.stop()
+            self._chat_timer = None
 
     def _focus_turns_table(self) -> None:
         try:
@@ -236,6 +278,7 @@ class SessionDetailScreen(Screen[None]):
         self._include_context_user_messages = not self._include_context_user_messages
         self._refresh_detail()
         self._update_monitor_status()
+        self._load_workbench_transcript_if_any()
 
     def action_toggle_select(self) -> None:
         table = self.query_one("#turns_table", DataTable)
@@ -354,8 +397,15 @@ class SessionDetailScreen(Screen[None]):
         )
 
     def on_worker_state_changed(self, message: Worker.StateChanged) -> None:  # noqa: N802
-        if message.worker.name != "review":
+        if message.worker.name == "review":
+            self._on_review_worker_state_changed(message)
             return
+        if message.worker.name == "workbench_chat":
+            self._on_chat_worker_state_changed(message)
+            return
+        return
+
+    def _on_review_worker_state_changed(self, message: Worker.StateChanged) -> None:
         md = self.query_one("#review_body", Markdown)
         title = self.query_one("#review_title", Static)
         if self._review_timer is not None:
@@ -440,6 +490,170 @@ class SessionDetailScreen(Screen[None]):
         elif not self._review_stream_text and elapsed_s >= 8:
             md = self.query_one("#review_body", Markdown)
             md.update(f"生成 AI Review 中… 已耗时 {elapsed_s}s（尚未收到 stream 内容；按 k 可取消）")
+
+    def _load_workbench_transcript_if_any(self) -> None:
+        if self._workbench_oa_session_id is None:
+            rec = self._cache.get_workbench_chat(codex_session_id=self.session_id)
+            if rec is not None:
+                self._workbench_oa_session_id = rec.oa_session_id
+        if self._workbench_oa_session_id:
+            self._chat_messages = load_workbench_transcript(oa_session_id=self._workbench_oa_session_id, limit=200)
+        self._render_chat_body(streaming_text=None)
+
+    def _render_chat_body(self, *, streaming_text: str | None) -> None:
+        body = self.query_one("#chat_body", Static)
+        lines: list[str] = []
+        for role, text in self._chat_messages:
+            if role == "user":
+                lines.append("### 你")
+                lines.append("\n".join([("> " + ln + "  ").rstrip() if ln else ">" for ln in (text or "").splitlines()]))
+            else:
+                lines.append("### 助手")
+                lines.append((text or "").strip())
+            lines.append("")
+        if streaming_text is not None:
+            lines.append("### 助手（生成中）")
+            lines.append(streaming_text.strip())
+            lines.append("")
+        md = "\n".join(lines).strip() or "（暂无对话）"
+        body.update(RichMarkdown(md))
+
+    def action_focus_chat(self) -> None:
+        self.call_after_refresh(self.query_one("#chat_input", Input).focus)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:  # noqa: N802
+        if event.input.id != "chat_input":
+            return
+        text = (event.value or "").strip()
+        event.input.value = ""
+        if not text:
+            return
+        self._start_workbench_chat(text)
+
+    def _ensure_workbench_session(self) -> str:
+        if self._workbench_oa_session_id:
+            return self._workbench_oa_session_id
+        oa = get_or_create_workbench_oa_session_id(cache=self._cache, codex_session_id=self.session_id)
+        self._workbench_oa_session_id = oa
+        return oa
+
+    def _start_workbench_chat(self, user_text: str) -> None:
+        if self._chat_worker is not None and self._chat_worker.state == WorkerState.RUNNING:
+            self.notify("工作台对话正在生成中…（Ctrl+K 可取消）", title="工作台")
+            return
+
+        try:
+            oa_session_id = self._ensure_workbench_session()
+        except Exception as e:  # noqa: BLE001
+            self._chat_messages.append(("assistant", f"（无法启动工作台会话）{e}"))
+            self._render_chat_body(streaming_text=None)
+            return
+        with self._turns_lock:
+            turns = list(self._turns)
+        snapshot = WorkbenchSnapshot(
+            codex_session_id=self.session_id,
+            rollout_path=self._rollout_path,
+            include_context_user_messages=self._include_context_user_messages,
+            turns=turns,
+            selected_turn_indices=sorted(self._selected_turn_indices),
+        )
+
+        self._chat_messages.append(("user", user_text))
+        self._chat_last_user_text = user_text
+        self._chat_abort_event = threading.Event()
+        self._chat_delta_queue = queue.SimpleQueue()
+        self._chat_stream_text = ""
+        self._chat_started_monotonic = time.monotonic()
+        self._chat_last_render_monotonic = 0.0
+        self._render_chat_body(streaming_text="")
+
+        abort_event = self._chat_abort_event
+        q = self._chat_delta_queue
+
+        def on_delta(delta: str) -> None:
+            if q is not None:
+                q.put(delta)
+
+        def run_sync() -> object:
+            return asyncio.run(
+                workbench_chat_stream(
+                    cfg=self.cfg,
+                    cache=self._cache,
+                    oa_session_id=oa_session_id,
+                    snapshot=snapshot,
+                    user_text=user_text,
+                    on_delta=on_delta,
+                    abort_event=abort_event,
+                )
+            )
+
+        self._chat_worker = self.run_worker(run_sync, name="workbench_chat", thread=True, exclusive=False)
+        if self._chat_timer is not None:
+            self._chat_timer.stop()
+        self._chat_timer = self.set_interval(0.5, self._tick_chat_status, name="chat_status")
+
+    def action_cancel_chat(self) -> None:
+        if self._chat_worker is None:
+            return
+        if self._chat_worker.state == WorkerState.RUNNING:
+            if self._chat_abort_event is not None:
+                self._chat_abort_event.set()
+            self._chat_worker.cancel()
+            self.notify("正在取消工作台生成…", title="工作台")
+
+    def _tick_chat_status(self) -> None:
+        if self._chat_worker is None or self._chat_worker.state != WorkerState.RUNNING:
+            if self._chat_timer is not None:
+                self._chat_timer.stop()
+                self._chat_timer = None
+            return
+
+        q = self._chat_delta_queue
+        if q is None:
+            return
+        got_any = False
+        chunks: list[str] = []
+        while True:
+            try:
+                chunks.append(q.get_nowait())
+                got_any = True
+            except Exception:
+                break
+        if got_any:
+            self._chat_stream_text += "".join(chunks)
+
+        now = time.monotonic()
+        if got_any and (now - self._chat_last_render_monotonic) >= 0.5:
+            self._chat_last_render_monotonic = now
+            self._render_chat_body(streaming_text=self._chat_stream_text)
+
+    def _on_chat_worker_state_changed(self, message: Worker.StateChanged) -> None:
+        if self._chat_timer is not None:
+            self._chat_timer.stop()
+            self._chat_timer = None
+
+        if message.state == WorkerState.CANCELLED:
+            self._render_chat_body(streaming_text=None)
+            return
+        if message.state == WorkerState.ERROR:
+            err = message.worker.error
+            self._chat_messages.append(("assistant", f"（失败）{err}"))
+            self._render_chat_body(streaming_text=None)
+            return
+        if message.state != WorkerState.SUCCESS:
+            return
+
+        rr = message.worker.result
+        text = getattr(rr, "final_text", None)
+        if not isinstance(text, str) or not text.strip():
+            text = self._chat_stream_text.strip() or "(empty)"
+        self._chat_messages.append(("assistant", text))
+        if self._workbench_oa_session_id:
+            self._chat_messages = load_workbench_transcript(oa_session_id=self._workbench_oa_session_id, limit=200) or self._chat_messages
+        self._render_chat_body(streaming_text=None)
+        self._chat_abort_event = None
+        self._chat_delta_queue = None
+        self._chat_stream_text = ""
 
     def action_toggle_monitor(self) -> None:
         if not self._rollout_path:
@@ -572,6 +786,9 @@ class SessionDetailScreen(Screen[None]):
 
     def action_back(self) -> None:
         self._stop_monitor()
+        if self._chat_timer is not None:
+            self._chat_timer.stop()
+            self._chat_timer = None
         self.app.action_back()
 
 
@@ -603,6 +820,8 @@ _KEY_HELP_MD = """
 - `r`：评审当前 turn
 - `R`：评审已选择 turns
 - `a`：评审整个 session
+- `i`：聚焦工作台输入框
+- `Ctrl+K`：取消工作台生成
 - `Space`：选择/取消选择当前 turn
 - `Shift+↑/↓`：区间选择（会随光标缩小/扩大）
 - `x`：清空选择

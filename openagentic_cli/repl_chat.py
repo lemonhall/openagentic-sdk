@@ -269,26 +269,9 @@ async def run_chat_impl(
             if completers:
                 completer = merge_completers(completers, deduplicate=True)
 
-            kb = KeyBindings()
-
-            @kb.add("enter", eager=True)  # type: ignore[misc]
-            def _enter_accepts_menu_item_without_submitting(event) -> None:  # noqa: ANN001
-                buf = event.app.current_buffer
-                if buf.complete_state is not None and buf.complete_state.current_completion is not None:
-                    buf.apply_completion(buf.complete_state.current_completion)
-                    return
-                buf.validate_and_handle()
-
-            @kb.add("escape", "enter", eager=True)  # type: ignore[misc]
-            def _alt_enter_inserts_newline(event) -> None:  # noqa: ANN001
-                # Terminals generally don't distinguish Shift+Enter from Enter.
-                # Map Alt+Enter (Esc, Enter) to "insert newline but don't submit".
-                buf = event.app.current_buffer
-                if buf.complete_state is not None and buf.complete_state.current_completion is not None:
-                    buf.apply_completion(buf.complete_state.current_completion)
-                buf.insert_text("\n")
-
-            if slash_menu_enabled:
+            slash_kb = None
+            if slash_menu_enabled or skills_menu_enabled:
+                kb = KeyBindings()
 
                 @kb.add("/")  # type: ignore[misc]
                 def _slash_opens_menu(event) -> None:  # noqa: ANN001
@@ -297,9 +280,8 @@ async def run_chat_impl(
                         buf.insert_text("/")
                         return
                     buf.insert_text("/")
-                    buf.start_completion(select_first=False)
-
-            if skills_menu_enabled and skill_completer is not None:
+                    if slash_menu_enabled:
+                        buf.start_completion(select_first=False)
 
                 @kb.add("$")  # type: ignore[misc]
                 def _dollar_opens_menu(event) -> None:  # noqa: ANN001
@@ -308,7 +290,18 @@ async def run_chat_impl(
                         buf.insert_text("$")
                         return
                     buf.insert_text("$")
-                    buf.start_completion(select_first=False)
+                    if skill_completer is not None:
+                        buf.start_completion(select_first=False)
+
+                @kb.add("enter", eager=True)  # type: ignore[misc]
+                def _enter_accepts_menu_item_without_submitting(event) -> None:  # noqa: ANN001
+                    buf = event.app.current_buffer
+                    if buf.complete_state is not None and buf.complete_state.current_completion is not None:
+                        buf.apply_completion(buf.complete_state.current_completion)
+                        return
+                    buf.validate_and_handle()
+
+                slash_kb = kb
 
             bottom_toolbar_enabled = os.getenv("OA_CLI_BOTTOM_TOOLBAR", "1").strip().lower() not in (
                 "0",
@@ -333,10 +326,9 @@ async def run_chat_impl(
                     # No frame: on some Windows terminals/ConPTY combinations, frames can appear to
                     # extend down to the bottom of the viewport. Keep input UX stable and minimal.
                     "wrap_lines": True,
-                    "multiline": True,
                     "cursor": CursorShape.BLINKING_BEAM,
                     "completer": completer,
-                    "key_bindings": kb,
+                    "key_bindings": slash_kb,
                     "complete_while_typing": False,
                     "reserve_space_for_menu": 6 if (slash_menu_enabled or skills_menu_enabled) else 0,
                     "handle_sigint": False,

@@ -138,24 +138,26 @@ async def run_chat_impl(
     backend0 = os.getenv("OA_CLI_INPUT_BACKEND", "prompt_toolkit").strip().lower()
     backend = backend0 if backend0 in ("prompt_toolkit", "legacy") else "prompt_toolkit"
 
-    def _can_use_prompt_toolkit() -> bool:
+    def _prompt_toolkit_unavailable_reason() -> str | None:
         if backend != "prompt_toolkit":
-            return False
+            return "disabled by OA_CLI_INPUT_BACKEND"
         if not (stdin_is_tty and is_tty):
-            return False
+            return "not a TTY"
         if not hasattr(stdin, "fileno"):
-            return False
+            return "stdin has no fileno()"
         if not hasattr(stdout, "fileno"):
-            return False
+            return "stdout has no fileno()"
         try:
             import prompt_toolkit  # noqa: F401
-        except Exception:
-            return False
-        return True
+        except Exception as e:  # noqa: BLE001
+            return f"import prompt_toolkit failed: {type(e).__name__}: {e}"
+        return None
 
-    use_prompt_toolkit = _can_use_prompt_toolkit()
+    ptk_reason = _prompt_toolkit_unavailable_reason()
+    use_prompt_toolkit = ptk_reason is None
     if backend == "prompt_toolkit" and not use_prompt_toolkit and (stdin_is_tty and is_tty):
-        _print(stdout, dim("note: prompt_toolkit input backend unavailable; falling back to legacy", enabled=enable_color))
+        details = f" ({ptk_reason})" if ptk_reason else ""
+        _print(stdout, dim(f"note: prompt_toolkit input backend unavailable{details}; falling back to legacy", enabled=enable_color))
 
     debug_input_backend = os.getenv("OA_DEBUG_INPUT", "").strip().lower() in ("1", "true", "yes", "on")
     if debug_input_backend and stdin_is_tty and is_tty:

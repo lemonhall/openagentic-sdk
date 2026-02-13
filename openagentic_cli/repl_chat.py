@@ -219,9 +219,11 @@ async def run_chat_impl(
             ptk_style = (
                 Style.from_dict(
                     {
-                        "default": "fg:#ffffff bg:#303030",
-                        "prompt": "fg:#ffffff bg:#303030 bold",
-                        "frame.border": "fg:#a0a0a0 bg:#303030",
+                        # Avoid setting a global background color: Prompt Toolkit clears/redraws the
+                        # prompt area, and a non-default background can make the frame appear to
+                        # "fill" the rest of the screen.
+                        "prompt": "fg:#ffffff bold",
+                        "frame.border": "#a0a0a0",
                     }
                 )
                 if enable_color
@@ -232,7 +234,10 @@ async def run_chat_impl(
                 kwargs: dict[str, object] = {
                     "message": ("paste> " if paste_mode else "oa> "),
                     "show_frame": True,
-                    "wrap_lines": False,
+                    # Let the input wrap/expand naturally as it grows.
+                    "wrap_lines": True,
+                    # Avoid reserving extra blank space for a completion menu (we don't use one).
+                    "reserve_space_for_menu": 0,
                     "handle_sigint": False,
                 }
                 if ptk_style is not None:

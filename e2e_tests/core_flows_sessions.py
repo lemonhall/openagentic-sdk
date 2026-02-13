@@ -20,6 +20,8 @@ _FLOW_MODULES: tuple[str, ...] = (
     "e2e_tests.e2e_flow_resume_post_tool_use_override_read_redacted_real_no_injection",
     # v47: events.jsonl never persists assistant.delta (anti-GB guard).
     "e2e_tests.e2e_flow_sessions_events_exclude_assistant_delta_real_no_injection",
+    # v49: resume fails clearly on corrupt events.jsonl.
+    "e2e_tests.e2e_flow_resume_corrupt_events_log_fails_clearly_real_no_injection",
 )
 
 

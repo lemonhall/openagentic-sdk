@@ -5,8 +5,8 @@ import os
 import re
 import shutil
 import sys
-from contextlib import nullcontext
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol, TextIO
@@ -18,8 +18,7 @@ from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.skills.index import index_skills
 
 from .permissions import CliPermissionPolicy, build_permission_gate
-from .repl_input import ReplTurn
-from .repl_input import _windows_ctrl_c_consume
+from .repl_input import ReplTurn, _windows_ctrl_c_consume
 from .style import (
     ANSI_BG_GRAY,
     ANSI_FG_DEFAULT,
@@ -168,7 +167,10 @@ async def run_chat_impl(
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).
         from prompt_toolkit import PromptSession  # noqa: PLC0415
-        from prompt_toolkit.completion import WordCompleter  # noqa: PLC0415
+        from prompt_toolkit.completion import (
+            WordCompleter,  # noqa: PLC0415
+            merge_completers,  # noqa: PLC0415
+        )
         from prompt_toolkit.cursor_shapes import CursorShape  # noqa: PLC0415
         from prompt_toolkit.input.defaults import create_input  # noqa: PLC0415
         from prompt_toolkit.key_binding import KeyBindings  # noqa: PLC0415
@@ -187,7 +189,10 @@ async def run_chat_impl(
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             restore_sigint = lambda: signal.signal(signal.SIGINT, old_sigint)  # noqa: E731
 
-            from .repl_core.win_ctrl_c import _disable_windows_processed_input, _install_windows_ctrl_c_handler  # noqa: PLC0415
+            from .repl_core.win_ctrl_c import (  # noqa: PLC0415
+                _disable_windows_processed_input,
+                _install_windows_ctrl_c_handler,
+            )
 
             _install_windows_ctrl_c_handler()
             restore_processed = _disable_windows_processed_input(stdin)
@@ -242,8 +247,30 @@ async def run_chat_impl(
                 else None
             )
 
+            skills_menu_enabled = os.getenv("OA_CLI_SKILL_MENU", "1").strip().lower() not in (
+                "0",
+                "false",
+                "no",
+                "off",
+            )
+
+            project_dir = options.project_dir or options.cwd
+            skills = index_skills(project_dir=str(project_dir)) if skills_menu_enabled else []
+            skill_words = [f"${s.name}" for s in skills]
+            skill_meta = {f"${s.name}": (s.description or "") for s in skills}
+            skill_completer = (
+                WordCompleter(skill_words, ignore_case=True, meta_dict=skill_meta, match_middle=False)
+                if (skills_menu_enabled and skill_words)
+                else None
+            )
+
+            completer = None
+            completers = [c for c in (slash_command_completer, skill_completer) if c is not None]
+            if completers:
+                completer = merge_completers(completers, deduplicate=True)
+
             slash_kb = None
-            if slash_menu_enabled:
+            if slash_menu_enabled or skills_menu_enabled:
                 kb = KeyBindings()
 
                 @kb.add("/")  # type: ignore[misc]
@@ -253,7 +280,18 @@ async def run_chat_impl(
                         buf.insert_text("/")
                         return
                     buf.insert_text("/")
-                    buf.start_completion(select_first=False)
+                    if slash_menu_enabled:
+                        buf.start_completion(select_first=False)
+
+                @kb.add("$")  # type: ignore[misc]
+                def _dollar_opens_menu(event) -> None:  # noqa: ANN001
+                    buf = event.app.current_buffer
+                    if buf.document.text_before_cursor != "":
+                        buf.insert_text("$")
+                        return
+                    buf.insert_text("$")
+                    if skill_completer is not None:
+                        buf.start_completion(select_first=False)
 
                 slash_kb = kb
 
@@ -281,7 +319,7 @@ async def run_chat_impl(
                     # extend down to the bottom of the viewport. Keep input UX stable and minimal.
                     "wrap_lines": True,
                     "cursor": CursorShape.BLINKING_BEAM,
-                    "completer": slash_command_completer,
+                    "completer": completer,
                     "key_bindings": slash_kb,
                     "complete_while_typing": False,
                     "reserve_space_for_menu": 6 if slash_menu_enabled else 0,

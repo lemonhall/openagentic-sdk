@@ -149,6 +149,12 @@ async def run_chat_impl(
             return "stdout has no fileno()"
         try:
             import prompt_toolkit  # noqa: F401
+            import inspect  # noqa: PLC0415
+
+            from prompt_toolkit import PromptSession  # noqa: PLC0415
+
+            if "show_frame" not in inspect.signature(PromptSession.prompt_async).parameters:
+                return "prompt_toolkit too old (need >=3.0.52 for show_frame)"
         except Exception as e:  # noqa: BLE001
             return f"import prompt_toolkit failed: {type(e).__name__}: {e}"
         return None
@@ -168,6 +174,7 @@ async def run_chat_impl(
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).
         from prompt_toolkit import PromptSession  # noqa: PLC0415
+        from prompt_toolkit.styles import Style  # noqa: PLC0415
         from prompt_toolkit.input.defaults import create_input  # noqa: PLC0415
         from prompt_toolkit.output.defaults import create_output  # noqa: PLC0415
         from prompt_toolkit.patch_stdout import patch_stdout  # noqa: PLC0415
@@ -209,6 +216,29 @@ async def run_chat_impl(
 
             _print(stdout, dim("Type /help for commands.", enabled=enable_color))
 
+            ptk_style = (
+                Style.from_dict(
+                    {
+                        "default": "fg:#ffffff bg:#303030",
+                        "prompt": "fg:#ffffff bg:#303030 bold",
+                        "frame.border": "fg:#a0a0a0 bg:#303030",
+                    }
+                )
+                if enable_color
+                else None
+            )
+
+            def _ptk_prompt_kwargs(*, paste_mode: bool = False) -> dict[str, object]:
+                kwargs: dict[str, object] = {
+                    "message": ("paste> " if paste_mode else "oa> "),
+                    "show_frame": True,
+                    "wrap_lines": False,
+                    "handle_sigint": False,
+                }
+                if ptk_style is not None:
+                    kwargs["style"] = ptk_style
+                return kwargs
+
             prompt_task: asyncio.Task[str] | None = None
             try:
                 while True:
@@ -217,9 +247,7 @@ async def run_chat_impl(
                             line = await prompt_task
                             prompt_task = None
                         else:
-                            stdout.write("oa> ")
-                            stdout.flush()
-                            line = await session.prompt_async("", handle_sigint=False)
+                            line = await session.prompt_async(**_ptk_prompt_kwargs())
                     except EOFError:
                         _print(stdout, "")
                         return 0
@@ -285,7 +313,7 @@ async def run_chat_impl(
                             lines: list[str] = []
                             while True:
                                 try:
-                                    s = await session.prompt_async("", handle_sigint=False)
+                                    s = await session.prompt_async(**_ptk_prompt_kwargs(paste_mode=True))
                                 except EOFError:
                                     break
                                 if s.strip() == "/end":
@@ -326,9 +354,7 @@ async def run_chat_impl(
 
                         # Prefetch the next prompt so users can type ahead while output streams.
                         if prompt_task is None:
-                            stdout.write("oa> ")
-                            stdout.flush()
-                            prompt_task = asyncio.create_task(session.prompt_async("", handle_sigint=False))
+                            prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
 
                         async for ev in runtime.query(prompt_text):
                             if getattr(ev, "type", None) == "system.init":

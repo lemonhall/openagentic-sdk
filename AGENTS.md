@@ -17,7 +17,7 @@
 - e2e（真实 API、会产生费用）：`python -m unittest discover -s e2e_tests -p "e2e_*.py" -v`
 - CLI 交互式 e2e（真实网络 + 真 TTY/pty；独立套件，WSL2/Linux/macOS 运行）：`wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_cli_tests -p "e2e_*.py" -v'`
 - CLI e2e（Windows 原生；ConPTY 真 TTY；独立套件）：`python -m unittest discover -s e2e_cli_win_tests -p "e2e_*.py" -v`
-- `oa chat` 输入后端（v52 起默认 Prompt Toolkit；可回退）：`$env:OA_CLI_INPUT_BACKEND='prompt_toolkit'`（legacy：`$env:OA_CLI_INPUT_BACKEND='legacy'`）
+- `oa chat` 输入后端（v52 起默认 Prompt Toolkit；可回退；依赖 `prompt_toolkit>=3.0.52`）：`$env:OA_CLI_INPUT_BACKEND='prompt_toolkit'`（legacy：`$env:OA_CLI_INPUT_BACKEND='legacy'`）
 - pre-commit（可选）：`pre-commit run -a`
 
 > 如果你在 WSL2 里跑 bash 命令：在 PowerShell 中显式调用 `wsl -e bash -lc '...'`，其余命令保持 PowerShell 语法。

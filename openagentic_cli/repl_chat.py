@@ -357,6 +357,9 @@ async def run_chat_impl(
                             if os.name == "nt" and _windows_ctrl_c_consume():
                                 abort_event.set()
                                 raise KeyboardInterrupt
+                        # Visual separation: keep one blank line between the end of the assistant/tool output
+                        # and the user's next prompt line.
+                        _print(stdout, "")
                         current_abort_event = None
                         if session_id:
                             opts = replace(opts, resume=session_id)

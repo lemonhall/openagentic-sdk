@@ -168,6 +168,7 @@ async def run_chat_impl(
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).
         from prompt_toolkit import PromptSession  # noqa: PLC0415
+        from prompt_toolkit.cursor_shapes import CursorShape  # noqa: PLC0415
         from prompt_toolkit.input.defaults import create_input  # noqa: PLC0415
         from prompt_toolkit.output.defaults import create_output  # noqa: PLC0415
         from prompt_toolkit.patch_stdout import patch_stdout  # noqa: PLC0415
@@ -215,6 +216,7 @@ async def run_chat_impl(
                     # No frame: on some Windows terminals/ConPTY combinations, frames can appear to
                     # extend down to the bottom of the viewport. Keep input UX stable and minimal.
                     "wrap_lines": True,
+                    "cursor": CursorShape.BLINKING_BEAM,
                     "handle_sigint": False,
                 }
                 return kwargs

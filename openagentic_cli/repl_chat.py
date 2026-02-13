@@ -157,6 +157,11 @@ async def run_chat_impl(
     if backend == "prompt_toolkit" and not use_prompt_toolkit and (stdin_is_tty and is_tty):
         _print(stdout, dim("note: prompt_toolkit input backend unavailable; falling back to legacy", enabled=enable_color))
 
+    debug_input_backend = os.getenv("OA_DEBUG_INPUT", "").strip().lower() in ("1", "true", "yes", "on")
+    if debug_input_backend and stdin_is_tty and is_tty:
+        chosen = "prompt_toolkit" if use_prompt_toolkit else "legacy"
+        _print(stdout, dim(f"input backend: {chosen}", enabled=enable_color))
+
     if use_prompt_toolkit:
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).

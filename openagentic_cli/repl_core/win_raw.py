@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from collections import deque
 from collections.abc import Callable
 from typing import TextIO
@@ -161,6 +162,15 @@ def _read_repl_turn_windows_raw(stdin: TextIO, *, paste_mode: bool) -> ReplTurn 
     WAIT_OBJECT_0 = 0
     WAIT_TIMEOUT = 0x00000102
 
+    def _cell_width(ch: str) -> int:
+        if not ch:
+            return 0
+        if unicodedata.combining(ch):
+            return 0
+        # Treat fullwidth/wide as 2 console cells. This is a pragmatic fix for
+        # CJK backspace rendering on Windows terminals.
+        return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
+
     def _write_console(s: str) -> None:
         try:
             out_handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
@@ -207,7 +217,7 @@ def _read_repl_turn_windows_raw(stdin: TextIO, *, paste_mode: bool) -> ReplTurn 
             _fill_pending(timeout_ms=50)
 
     def _read_line_raw() -> tuple[str, bool]:
-        chars: list[str] = []
+        chars: list[tuple[str, int]] = []
         is_paste = False
         in_bp = False
         esc: list[str] | None = None
@@ -246,30 +256,35 @@ def _read_repl_turn_windows_raw(stdin: TextIO, *, paste_mode: bool) -> ReplTurn 
 
             if ch in ("\b", "\x7f"):
                 if chars:
-                    chars.pop()
-                    _write_console("\b \b")
+                    _ch, w = chars.pop()
+                    # If the last codepoint is a combining mark, delete the
+                    # entire cluster (at least until a non-combining base).
+                    while w == 0 and chars:
+                        _ch, w = chars.pop()
+                    w = max(1, int(w))
+                    _write_console(("\b" * w) + (" " * w) + ("\b" * w))
                 continue
 
             if ch == "\r":
                 if in_bp:
-                    chars.append("\n")
+                    chars.append(("\n", 0))
                     _write_console("\n")
                     continue
                 _write_console("\n")
                 # Normalize CRLF: if we already have LF queued, drop it.
                 if _WIN_PENDING_CHARS and _WIN_PENDING_CHARS[0] == "\n":
                     _WIN_PENDING_CHARS.popleft()
-                return "".join(chars), is_paste
+                return "".join(c for c, _w in chars), is_paste
             if ch == "\n":
                 if in_bp:
-                    chars.append("\n")
+                    chars.append(("\n", 0))
                     _write_console("\n")
                     continue
                 _write_console("\n")
-                return "".join(chars), is_paste
+                return "".join(c for c, _w in chars), is_paste
 
             # Normal character.
-            chars.append(ch)
+            chars.append((ch, _cell_width(ch)))
             _write_console(ch)
 
     if paste_mode:
@@ -289,4 +304,3 @@ def _read_repl_turn_windows_raw(stdin: TextIO, *, paste_mode: bool) -> ReplTurn 
     if not is_paste:
         text = _VT_KEY_SEQ_RE.sub("", text)
     return ReplTurn(text, is_paste=is_paste)
-

@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.markdown import Markdown as RichMarkdown
 from textual.binding import Binding
@@ -52,6 +53,7 @@ class SessionDetailScreen(Screen[None]):
         ("escape", "back", "Back"),
         ("c", "toggle_collapse_user", "折叠/展开"),
         ("t", "toggle_context", "含/不含上下文"),
+        ("m", "toggle_monitor", "监控最新"),
         Binding("up", "nav_up", "", show=False),
         Binding("down", "nav_down", "", show=False),
         ("enter", "open_turn_detail", "详情"),
@@ -72,6 +74,7 @@ class SessionDetailScreen(Screen[None]):
         self._db = CodexDb(cfg.codex_db_path)
         self._fs = CodexSessionsFs(cfg.codex_sessions_dir)
         self._cache = CacheDb()
+        self._turns_lock = threading.Lock()
         self._turns: list[Turn] = []
         self._rollout_path: str | None = None
         self._include_context_user_messages = False
@@ -90,6 +93,14 @@ class SessionDetailScreen(Screen[None]):
         self._review_last_render_monotonic: float = 0.0
         self._review_last_delta_monotonic: float | None = None
 
+        self._monitor_enabled = False
+        self._monitor_timer: Timer | None = None
+        self._monitor_interval_s = 5.0
+        self._monitor_last_stat: tuple[int, int] | None = None  # (mtime_ns, size)
+        self._monitor_last_latest_signature: tuple[int, int] | None = None  # (turn_idx, hash(assistant_text))
+        self._monitor_stable_polls: int = 0
+        self._monitor_last_auto_attempt_signature: tuple[int, int] | None = None
+
     def compose(self):
         with Horizontal():
             with Vertical(id="left"):
@@ -102,16 +113,24 @@ class SessionDetailScreen(Screen[None]):
                     yield Static("", id="turn_detail", markup=False)
             with VerticalScroll(id="review"):
                 yield Static("AI Review（按 r 生成，走 openagentic-sdk）", id="review_title")
+                yield Static("监控：OFF（m 开关；5s 轮询；稳定 2 次后自动评审最新 turn）", id="monitor_status")
                 yield Markdown(_KEY_HELP_MD.strip() + "\n", id="key_help")
                 yield Markdown("进入这里后再按需生成 review，并缓存到本地。", id="review_body")
 
     def on_mount(self) -> None:
         self._refresh_detail()
         self._focus_turns_table()
+        self._update_monitor_status()
 
     def on_show(self) -> None:
         # Ensure arrow-key navigation feels "terminal-native" without needing mouse focus.
         self._focus_turns_table()
+
+    def on_unmount(self) -> None:
+        self._stop_monitor()
+        if self._review_timer is not None:
+            self._review_timer.stop()
+            self._review_timer = None
 
     def _focus_turns_table(self) -> None:
         try:
@@ -132,23 +151,32 @@ class SessionDetailScreen(Screen[None]):
         table = self.query_one("#turns_table", DataTable)
         detail = self.query_one("#turn_detail", Static)
 
-        table.clear(columns=True)
-        table.add_column("✓", key="sel", width=2)
-        table.add_column("#", key="idx", width=4)
-        # Fixed widths avoid horizontal scrolling for typical terminals.
-        table.add_column("User", key="user", width=48)
-        table.add_column("Assistant(final)", key="assistant", width=64)
+        if not table.columns:
+            table.clear(columns=True)
+            table.add_column("✓", key="sel", width=2)
+            table.add_column("#", key="idx", width=4)
+            # Fixed widths avoid horizontal scrolling for typical terminals.
+            table.add_column("User", key="user", width=48)
+            table.add_column("Assistant(final)", key="assistant", width=64)
+        else:
+            table.clear(columns=False)
 
         if not rollout_path:
             detail.update("未找到该 session 的 rollout 文件（SQLite/FS 都没有）。")
             return
 
-        self._turns = load_turns(
+        turns = load_turns(
             rollout_path,
             include_context_user_messages=self._include_context_user_messages,
         )
+        with self._turns_lock:
+            self._turns = turns
         self._selected_turn_indices.clear()
         self._selection_anchor_row = None
+        self._monitor_last_stat = None
+        self._monitor_last_latest_signature = None
+        self._monitor_stable_polls = 0
+        self._monitor_last_auto_attempt_signature = None
 
         if not self._turns:
             detail.update("未解析到 turn（仅展示 user 输入 + assistant 最终回复）。\n按 t 可切换是否包含 context user 消息。")
@@ -207,6 +235,7 @@ class SessionDetailScreen(Screen[None]):
     def action_toggle_context(self) -> None:
         self._include_context_user_messages = not self._include_context_user_messages
         self._refresh_detail()
+        self._update_monitor_status()
 
     def action_toggle_select(self) -> None:
         table = self.query_one("#turns_table", DataTable)
@@ -302,7 +331,9 @@ class SessionDetailScreen(Screen[None]):
 
     def _review_sync(self) -> ReviewResult:
         assert self._review_params is not None
-        turns = [t for t in self._turns if t.index in set(self._review_params.indices)]
+        with self._turns_lock:
+            all_turns = list(self._turns)
+        turns = [t for t in all_turns if t.index in set(self._review_params.indices)]
         abort_event = self._review_abort_event
         q = self._review_delta_queue
 
@@ -410,7 +441,137 @@ class SessionDetailScreen(Screen[None]):
             md = self.query_one("#review_body", Markdown)
             md.update(f"生成 AI Review 中… 已耗时 {elapsed_s}s（尚未收到 stream 内容；按 k 可取消）")
 
+    def action_toggle_monitor(self) -> None:
+        if not self._rollout_path:
+            self.notify("未找到 rollout 文件，无法开启监控。", title="监控")
+            return
+        self._monitor_enabled = not self._monitor_enabled
+        if self._monitor_enabled:
+            if self._monitor_timer is not None:
+                self._monitor_timer.stop()
+            self._monitor_timer = self.set_interval(self._monitor_interval_s, self._tick_monitor, name="monitor")
+            self._monitor_last_stat = None
+            self._monitor_last_latest_signature = None
+            self._monitor_stable_polls = 0
+            self._monitor_last_auto_attempt_signature = None
+        else:
+            self._stop_monitor()
+        self._update_monitor_status()
+
+    def _stop_monitor(self) -> None:
+        self._monitor_enabled = False
+        if self._monitor_timer is not None:
+            self._monitor_timer.stop()
+            self._monitor_timer = None
+
+    def _update_monitor_status(self, *, note: str | None = None) -> None:
+        try:
+            st = self.query_one("#monitor_status", Static)
+        except Exception:
+            return
+        if not self._monitor_enabled:
+            st.update("监控：OFF（m 开关；5s 轮询；稳定 2 次后自动评审最新 turn）")
+            return
+        extra = f"；{note}" if note else ""
+        st.update(f"监控：ON（5s；稳定 2 次后自动评审最新 turn）{extra}")
+
+    def _tick_monitor(self) -> None:
+        if not self._monitor_enabled:
+            self._stop_monitor()
+            self._update_monitor_status()
+            return
+        if not self._rollout_path:
+            self._update_monitor_status(note="未找到 rollout")
+            return
+
+        p = Path(self._rollout_path)
+        try:
+            st = p.stat()
+        except OSError:
+            self._update_monitor_status(note="rollout 不可读")
+            return
+
+        stat_sig = (int(st.st_mtime_ns), int(st.st_size))
+        changed = stat_sig != self._monitor_last_stat
+        self._monitor_last_stat = stat_sig
+        if changed:
+            self._refresh_turns_preserve_cursor()
+
+        latest = self._turns[-1] if self._turns else None
+        if latest is None:
+            self._update_monitor_status(note="无 turn")
+            return
+
+        assistant_text = (latest.assistant_text or "").strip()
+        latest_sig = (latest.index, hash(assistant_text))
+        if not assistant_text:
+            self._monitor_last_latest_signature = latest_sig
+            self._monitor_stable_polls = 0
+            self._update_monitor_status(note=f"等待 Turn {latest.index} assistant(final)…")
+            return
+
+        if self._monitor_last_latest_signature == latest_sig:
+            self._monitor_stable_polls += 1
+        else:
+            self._monitor_last_latest_signature = latest_sig
+            self._monitor_stable_polls = 1
+
+        if self._monitor_stable_polls < 2:
+            self._update_monitor_status(note=f"Turn {latest.index} 稳定中（{self._monitor_stable_polls}/2）")
+            return
+
+        if self._review_worker is not None and self._review_worker.state == WorkerState.RUNNING:
+            self._update_monitor_status(note=f"Turn {latest.index} 已稳定；review 生成中…")
+            return
+
+        if self._monitor_last_auto_attempt_signature == latest_sig:
+            self._update_monitor_status(note=f"Turn {latest.index} 已自动评审")
+            return
+
+        self._monitor_last_auto_attempt_signature = latest_sig
+        self._update_monitor_status(note=f"自动评审 Turn {latest.index}")
+        self._start_review(scope="turn", indices=[latest.index])
+
+    def _refresh_turns_preserve_cursor(self) -> None:
+        if not self._rollout_path:
+            return
+        table = self.query_one("#turns_table", DataTable)
+        detail = self.query_one("#turn_detail", Static)
+
+        old_cursor = table.cursor_row
+        follow_tail = bool(self._turns) and old_cursor >= (len(self._turns) - 1)
+
+        turns = load_turns(
+            self._rollout_path,
+            include_context_user_messages=self._include_context_user_messages,
+        )
+        with self._turns_lock:
+            self._turns = turns
+
+        table.clear(columns=False)
+        if not self._turns:
+            detail.update("未解析到 turn（仅展示 user 输入 + assistant 最终回复）。\n按 t 可切换是否包含 context user 消息。")
+            return
+
+        valid_indices = {t.index for t in self._turns}
+        self._selected_turn_indices = {i for i in self._selected_turn_indices if i in valid_indices}
+
+        for t in self._turns:
+            table.add_row(
+                ("✓" if t.index in self._selected_turn_indices else ""),
+                str(t.index),
+                _preview(t.user_text, limit=120),
+                _preview(t.assistant_text, limit=200),
+                key=str(t.index),
+            )
+
+        new_cursor = (len(self._turns) - 1) if follow_tail else min(old_cursor, len(self._turns) - 1)
+        table.cursor_coordinate = (new_cursor, 0)
+        self._render_turn_detail(row_index=new_cursor)
+        self._focus_turns_table()
+
     def action_back(self) -> None:
+        self._stop_monitor()
         self.app.action_back()
 
 
@@ -438,6 +599,7 @@ _KEY_HELP_MD = """
 **快捷键**
 
 - `Enter`：打开当前 turn 详情（全屏）
+- `m`：实时监控最新 turn（稳定 2 次后自动评审）
 - `r`：评审当前 turn
 - `R`：评审已选择 turns
 - `a`：评审整个 session

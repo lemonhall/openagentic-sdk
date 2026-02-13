@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import queue
+import threading
+import time
 from dataclasses import dataclass
 
-from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
+from rich.markdown import Markdown as RichMarkdown
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.timer import Timer
 from textual.widgets import DataTable, Markdown, Static
 from textual.worker import Worker, WorkerState
 
-from ..ai.reviewer import ReviewResult, review_turns
+from ..ai.reviewer import ReviewResult, review_turns_stream
 from ..config import InsightConfig
 from ..db.cache_db import CacheDb
 from ..db.codex_db import CodexDb
@@ -17,16 +23,46 @@ from ..parser.turns import Turn, load_turns
 
 
 class SessionDetailScreen(Screen[None]):
+    DEFAULT_CSS = """
+    SessionDetailScreen #left {
+        width: 1fr;
+    }
+
+    SessionDetailScreen #turns_table {
+        height: 14;
+    }
+
+    SessionDetailScreen #turn_detail_scroll {
+        height: 1fr;
+        border: round $primary;
+    }
+
+    SessionDetailScreen #turn_detail {
+        padding: 1 2;
+        height: auto;
+    }
+
+    SessionDetailScreen #review {
+        width: 1fr;
+        border-left: solid $panel;
+    }
+    """
+
     BINDINGS = [
         ("escape", "back", "Back"),
-        ("c", "toggle_collapse_user", "Collapse"),
-        ("t", "toggle_context", "Context"),
-        ("space", "toggle_select", "Select"),
-        ("shift+up", "select_range_up", "RangeUp"),
-        ("shift+down", "select_range_down", "RangeDown"),
-        ("r", "review_turn", "ReviewTurn"),
-        ("R", "review_selection", "ReviewSelection"),
-        ("a", "review_session", "ReviewSession"),
+        ("c", "toggle_collapse_user", "折叠/展开"),
+        ("t", "toggle_context", "含/不含上下文"),
+        Binding("up", "nav_up", "", show=False),
+        Binding("down", "nav_down", "", show=False),
+        ("enter", "open_turn_detail", "详情"),
+        ("space", "toggle_select", "选择/取消"),
+        ("shift+up", "select_range_up", "区间选择↑"),
+        ("shift+down", "select_range_down", "区间选择↓"),
+        ("x", "clear_selection", "清空选择"),
+        ("r", "review_turn", "评审当前"),
+        ("R", "review_selection", "评审所选"),
+        ("a", "review_session", "评审全局"),
+        ("k", "cancel_review", "取消评审"),
     ]
 
     def __init__(self, cfg: InsightConfig, *, session_id: str) -> None:
@@ -37,6 +73,7 @@ class SessionDetailScreen(Screen[None]):
         self._fs = CodexSessionsFs(cfg.codex_sessions_dir)
         self._cache = CacheDb()
         self._turns: list[Turn] = []
+        self._rollout_path: str | None = None
         self._include_context_user_messages = False
         self._collapse_user = True
 
@@ -45,22 +82,43 @@ class SessionDetailScreen(Screen[None]):
 
         self._review_worker: Worker[ReviewResult] | None = None
         self._review_params: _ReviewParams | None = None
+        self._review_started_monotonic: float | None = None
+        self._review_timer: Timer | None = None
+        self._review_abort_event: threading.Event | None = None
+        self._review_delta_queue: queue.SimpleQueue[str] | None = None
+        self._review_stream_text: str = ""
+        self._review_last_render_monotonic: float = 0.0
+        self._review_last_delta_monotonic: float | None = None
 
     def compose(self):
         with Horizontal():
-            with VerticalScroll(id="left"):
+            with Vertical(id="left"):
                 yield Static(f"Level 2: Session 详情：{self.session_id}", id="title")
                 table = DataTable(id="turns_table")
                 table.cursor_type = "row"
+                table.show_cursor = True
                 yield table
                 with VerticalScroll(id="turn_detail_scroll"):
-                    yield Markdown("", id="turn_detail")
+                    yield Static("", id="turn_detail", markup=False)
             with VerticalScroll(id="review"):
                 yield Static("AI Review（按 r 生成，走 openagentic-sdk）", id="review_title")
+                yield Markdown(_KEY_HELP_MD.strip() + "\n", id="key_help")
                 yield Markdown("进入这里后再按需生成 review，并缓存到本地。", id="review_body")
 
     def on_mount(self) -> None:
         self._refresh_detail()
+        self._focus_turns_table()
+
+    def on_show(self) -> None:
+        # Ensure arrow-key navigation feels "terminal-native" without needing mouse focus.
+        self._focus_turns_table()
+
+    def _focus_turns_table(self) -> None:
+        try:
+            table = self.query_one("#turns_table", DataTable)
+        except Exception:
+            return
+        self.call_after_refresh(table.focus)
 
     def _refresh_detail(self) -> None:
         rollout_path: str | None = None
@@ -70,14 +128,16 @@ class SessionDetailScreen(Screen[None]):
             rollout_path = row.rollout_path if row is not None else None
         if not rollout_path and self._fs.exists():
             rollout_path = self._fs.rollout_path_for_session(self.session_id)
+        self._rollout_path = rollout_path
         table = self.query_one("#turns_table", DataTable)
-        detail = self.query_one("#turn_detail", Markdown)
+        detail = self.query_one("#turn_detail", Static)
 
         table.clear(columns=True)
         table.add_column("✓", key="sel", width=2)
         table.add_column("#", key="idx", width=4)
-        table.add_column("User", key="user")
-        table.add_column("Assistant(final)", key="assistant")
+        # Fixed widths avoid horizontal scrolling for typical terminals.
+        table.add_column("User", key="user", width=48)
+        table.add_column("Assistant(final)", key="assistant", width=64)
 
         if not rollout_path:
             detail.update("未找到该 session 的 rollout 文件（SQLite/FS 都没有）。")
@@ -98,15 +158,16 @@ class SessionDetailScreen(Screen[None]):
             table.add_row(
                 "",
                 str(t.index),
-                _preview(t.user_text),
-                _preview(t.assistant_text),
+                _preview(t.user_text, limit=120),
+                _preview(t.assistant_text, limit=200),
                 key=str(t.index),
             )
         table.cursor_coordinate = (0, 0)
         self._render_turn_detail(row_index=0)
+        self._focus_turns_table()
 
     def _render_turn_detail(self, *, row_index: int) -> None:
-        detail = self.query_one("#turn_detail", Markdown)
+        detail = self.query_one("#turn_detail", Static)
         if row_index < 0 or row_index >= len(self._turns):
             detail.update("")
             return
@@ -115,30 +176,28 @@ class SessionDetailScreen(Screen[None]):
         if self._collapse_user:
             user_text = _collapse_text(user_text)
 
-        user_block = _md_fence(user_text)
-        assistant_block = _md_fence(t.assistant_text or "")
-        extra = "（按 c 展开/收起 user）"
-        detail.update(
-            "\n".join(
-                [
-                    f"## Turn {t.index} {extra}",
-                    "",
-                    "### User",
-                    user_block,
-                    "",
-                    "### Assistant (final)",
-                    assistant_block,
-                ]
-            ).strip()
-        )
+        detail.update(RichMarkdown(_turn_detail_markdown(user_text=user_text, assistant_text=t.assistant_text or "")))
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:  # noqa: N802
-        try:
-            row = int(str(event.row_key.value))
-        except Exception:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:  # noqa: N802
+        if event.data_table.id != "turns_table":
             return
-        self._selection_anchor_row = self.query_one("#turns_table", DataTable).cursor_row
-        self._render_turn_detail(row_index=max(0, row - 1))
+        self._render_turn_detail(row_index=event.cursor_row)
+
+    def action_nav_up(self) -> None:
+        table = self.query_one("#turns_table", DataTable)
+        table.action_cursor_up()
+
+    def action_nav_down(self) -> None:
+        table = self.query_one("#turns_table", DataTable)
+        table.action_cursor_down()
+
+    def action_open_turn_detail(self) -> None:
+        table = self.query_one("#turns_table", DataTable)
+        row_index = table.cursor_row
+        if row_index < 0 or row_index >= len(self._turns):
+            return
+        t = self._turns[row_index]
+        self.app.push_screen(_TurnDetailModal(turn=t))
 
     def action_toggle_collapse_user(self) -> None:
         self._collapse_user = not self._collapse_user
@@ -161,6 +220,7 @@ class SessionDetailScreen(Screen[None]):
         else:
             self._selected_turn_indices.add(turn_idx)
             table.update_cell(str(turn_idx), "sel", "✓")
+        self._selection_anchor_row = row_index
 
     def action_select_range_up(self) -> None:
         self._select_range(delta=-1)
@@ -178,12 +238,22 @@ class SessionDetailScreen(Screen[None]):
             table.action_cursor_down()
         start = min(self._selection_anchor_row, table.cursor_row)
         end = max(self._selection_anchor_row, table.cursor_row)
+        new_sel: set[int] = set()
         for row in range(start, end + 1):
             if 0 <= row < len(self._turns):
-                idx = self._turns[row].index
-                self._selected_turn_indices.add(idx)
-                table.update_cell(str(idx), "sel", "✓")
-        self._render_turn_detail(row_index=table.cursor_row)
+                new_sel.add(self._turns[row].index)
+        self._selected_turn_indices = new_sel
+        self._sync_selection_table()
+
+    def action_clear_selection(self) -> None:
+        self._selected_turn_indices.clear()
+        self._selection_anchor_row = None
+        self._sync_selection_table()
+
+    def _sync_selection_table(self) -> None:
+        table = self.query_one("#turns_table", DataTable)
+        for t in self._turns:
+            table.update_cell(str(t.index), "sel", ("✓" if t.index in self._selected_turn_indices else ""))
 
     def action_review_turn(self) -> None:
         table = self.query_one("#turns_table", DataTable)
@@ -205,8 +275,9 @@ class SessionDetailScreen(Screen[None]):
 
     def _start_review(self, *, scope: str, indices: list[int]) -> None:
         md = self.query_one("#review_body", Markdown)
+        title = self.query_one("#review_title", Static)
         if self._review_worker is not None and self._review_worker.state == WorkerState.RUNNING:
-            self.notify("AI Review 正在生成中…", title="Review")
+            self.notify("AI Review 正在生成中…（按 k 可取消）", title="Review")
             return
 
         selection = "all" if scope == "session" else ",".join(str(x) for x in indices)
@@ -215,27 +286,64 @@ class SessionDetailScreen(Screen[None]):
             md.update(cached.review_markdown)
             return
 
-        md.update("生成 AI Review 中…（后台运行，不阻塞界面）")
+        self._review_started_monotonic = time.monotonic()
+        self._review_last_delta_monotonic = None
+        self._review_abort_event = threading.Event()
+        self._review_delta_queue = queue.SimpleQueue()
+        self._review_stream_text = ""
+        self._review_last_render_monotonic = 0.0
+        title.update("AI Review（生成中…）")
+        md.update("生成 AI Review 中…（streaming；按 k 可取消）")
         self._review_params = _ReviewParams(scope=scope, indices=indices)
-        self._review_worker = self.app.run_worker(self._review_sync, name="review", thread=True, exclusive=True)
+        self._review_worker = self.run_worker(self._review_sync, name="review", thread=True, exclusive=True)
+        if self._review_timer is not None:
+            self._review_timer.stop()
+        self._review_timer = self.set_interval(1.0, self._tick_review_status, name="review_status")
 
     def _review_sync(self) -> ReviewResult:
         assert self._review_params is not None
         turns = [t for t in self._turns if t.index in set(self._review_params.indices)]
-        return asyncio.run(review_turns(cfg=self.cfg, scope=self._review_params.scope, turns=turns))
+        abort_event = self._review_abort_event
+        q = self._review_delta_queue
+
+        def on_delta(delta: str) -> None:
+            if q is not None:
+                q.put(delta)
+
+        return asyncio.run(
+            review_turns_stream(
+                cfg=self.cfg,
+                scope=self._review_params.scope,
+                turns=turns,
+                rollout_path=self._rollout_path,
+                include_context_user_messages=self._include_context_user_messages,
+                on_delta=on_delta,
+                abort_event=abort_event,
+            )
+        )
 
     def on_worker_state_changed(self, message: Worker.StateChanged) -> None:  # noqa: N802
         if message.worker.name != "review":
             return
         md = self.query_one("#review_body", Markdown)
+        title = self.query_one("#review_title", Static)
+        if self._review_timer is not None:
+            self._review_timer.stop()
+            self._review_timer = None
+        if message.state == WorkerState.CANCELLED:
+            title.update("AI Review（已取消）")
+            md.update("AI Review 已取消。")
+            return
         if message.state == WorkerState.ERROR:
             err = message.worker.error
+            title.update("AI Review（失败）")
             md.update(f"AI Review 失败：{err}")
             return
         if message.state != WorkerState.SUCCESS:
             return
         rr = message.worker.result
         if rr is None or self._review_params is None:
+            title.update("AI Review（空结果）")
             md.update("AI Review 返回为空。")
             return
         selection = "all" if self._review_params.scope == "session" else ",".join(str(x) for x in self._review_params.indices)
@@ -246,7 +354,61 @@ class SessionDetailScreen(Screen[None]):
             review_markdown=rr.markdown,
             model=rr.model,
         )
+        title.update("AI Review")
         md.update(rr.markdown)
+        self._review_abort_event = None
+        self._review_delta_queue = None
+
+    def action_cancel_review(self) -> None:
+        if self._review_worker is None:
+            return
+        if self._review_worker.state == WorkerState.RUNNING:
+            if self._review_abort_event is not None:
+                self._review_abort_event.set()
+            self._review_worker.cancel()
+            md = self.query_one("#review_body", Markdown)
+            md.update("正在取消 AI Review…")
+            if self._review_timer is not None:
+                self._review_timer.stop()
+                self._review_timer = None
+
+    def _tick_review_status(self) -> None:
+        if self._review_worker is None or self._review_worker.state != WorkerState.RUNNING:
+            if self._review_timer is not None:
+                self._review_timer.stop()
+                self._review_timer = None
+            return
+        start = self._review_started_monotonic
+        if start is None:
+            return
+        elapsed_s = int(time.monotonic() - start)
+        title = self.query_one("#review_title", Static)
+        title.update(f"AI Review（生成中 {elapsed_s}s；k 取消）")
+
+        q = self._review_delta_queue
+        if q is None:
+            return
+        got_any = False
+        chunks: list[str] = []
+        while True:
+            try:
+                chunks.append(q.get_nowait())
+                got_any = True
+            except Exception:
+                break
+        if got_any:
+            self._review_last_delta_monotonic = time.monotonic()
+            self._review_stream_text += "".join(chunks)
+
+        # Throttle Markdown re-render.
+        now = time.monotonic()
+        if got_any and (now - self._review_last_render_monotonic) >= 0.5:
+            self._review_last_render_monotonic = now
+            md = self.query_one("#review_body", Markdown)
+            md.update(self._review_stream_text)
+        elif not self._review_stream_text and elapsed_s >= 8:
+            md = self.query_one("#review_body", Markdown)
+            md.update(f"生成 AI Review 中… 已耗时 {elapsed_s}s（尚未收到 stream 内容；按 k 可取消）")
 
     def action_back(self) -> None:
         self.app.action_back()
@@ -272,6 +434,101 @@ def _collapse_text(text: str, *, max_chars: int = 1200, max_lines: int = 40) -> 
     return s2 if len(s2) <= max_chars else (s2[:max_chars] + "…")
 
 
-def _md_fence(text: str) -> str:
-    s = (text or "").replace("```", "``\u200b`").rstrip()
-    return f"```text\n{s}\n```"
+_KEY_HELP_MD = """
+**快捷键**
+
+- `Enter`：打开当前 turn 详情（全屏）
+- `r`：评审当前 turn
+- `R`：评审已选择 turns
+- `a`：评审整个 session
+- `Space`：选择/取消选择当前 turn
+- `Shift+↑/↓`：区间选择（会随光标缩小/扩大）
+- `x`：清空选择
+- `c`：折叠/展开 user 输入
+- `t`：切换是否包含 context user 消息
+- `k`：取消正在生成的 review
+- `Esc`：返回上一层
+"""
+
+
+class _TurnDetailModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss", "关闭"),
+        Binding("enter", "dismiss", "关闭", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    _TurnDetailModal {
+        align: center middle;
+    }
+
+    _TurnDetailModal #panel {
+        width: 90%;
+        height: 90%;
+        border: round $primary;
+        background: $surface;
+    }
+
+    _TurnDetailModal #body {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    _TurnDetailModal #body_md {
+        height: auto;
+    }
+    """
+
+    def __init__(self, *, turn: Turn) -> None:
+        super().__init__()
+        self.turn = turn
+
+    def compose(self):
+        with Vertical(id="panel"):
+            yield Static(f"Turn {self.turn.index} 详情（Esc/Enter 关闭）", id="title")
+            with VerticalScroll(id="body"):
+                yield Static(
+                    RichMarkdown(_turn_detail_markdown(user_text=self.turn.user_text, assistant_text=self.turn.assistant_text)),
+                    id="body_md",
+                    markup=False,
+                )
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self.query_one("#body", VerticalScroll).focus)
+
+    def action_dismiss(self) -> None:
+        self.dismiss(None)
+
+
+def _turn_detail_markdown(*, user_text: str, assistant_text: str) -> str:
+    user = (user_text or "").replace("\r\n", "\n").strip()
+    assistant = (assistant_text or "").replace("\r\n", "\n").strip()
+    if not user:
+        user = "（空）"
+    if not assistant:
+        assistant = "（空）"
+
+    user_lines = user.split("\n")
+    # Preserve user newlines without forcing code fences (avoids horizontal scroll),
+    # and keep it visually distinct via blockquote.
+    if user_lines:
+        rendered_lines: list[str] = []
+        for line in user_lines:
+            if line == "":
+                rendered_lines.append(">")
+            else:
+                rendered_lines.append(f"> {line}  ")
+        user_blockquote = "\n".join(rendered_lines)
+    else:
+        user_blockquote = "> （空）"
+
+    return "\n".join(
+        [
+            "## User",
+            user_blockquote,
+            "",
+            "## Assistant (final)",
+            assistant,
+            "",
+        ]
+    ).strip() + "\n"

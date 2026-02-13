@@ -580,7 +580,7 @@ def _load_plugins_from_dir(dir_path: Path) -> list[str]:
                 continue
             if p.suffix not in (".ts", ".js"):
                 continue
-            out.append("file://" + str(p.resolve()))
+            out.append(p.resolve().as_uri())
     return out
 
 

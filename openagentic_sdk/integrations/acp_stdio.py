@@ -274,6 +274,7 @@ class AcpStdioServer:
             cwd=st.cwd,
             project_dir=st.cwd,
             abort_event=st.abort_event,
+            include_partial_messages=True,
             permission_gate=gate,
         )
 

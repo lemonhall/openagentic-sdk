@@ -422,7 +422,7 @@ class OpenAgenticHttpServer:
                         200,
                         {
                             "openapi": "3.1.1",
-                            "info": {"title": "openagentic-sdk", "version": "0.1.3"},
+                            "info": {"title": "openagentic-sdk", "version": "0.1.4"},
                              "paths": {
                                  "/global/health": {"get": {}},
                                  "/app": {"get": {}},

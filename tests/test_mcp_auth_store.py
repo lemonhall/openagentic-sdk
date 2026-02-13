@@ -25,7 +25,12 @@ class TestMcpAuthStore(unittest.TestCase):
                 os.environ.pop("OPENAGENTIC_SDK_HOME", None)
 
             mode = stat.S_IMODE(p.stat().st_mode)
-            self.assertEqual(mode, 0o600)
+            if os.name == "nt":
+                # Windows `chmod` is best-effort and does not provide POSIX mode bits.
+                # `stat` typically reports 0o666 for writable files.
+                self.assertIn(mode, (0o666, 0o444))
+            else:
+                self.assertEqual(mode, 0o600)
 
 
 if __name__ == "__main__":

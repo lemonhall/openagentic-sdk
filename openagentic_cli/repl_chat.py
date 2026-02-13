@@ -210,6 +210,23 @@ async def run_chat_impl(
 
             _print(stdout, dim("Type /help for commands.", enabled=enable_color))
 
+            bottom_toolbar_enabled = os.getenv("OA_CLI_BOTTOM_TOOLBAR", "1").strip().lower() not in (
+                "0",
+                "false",
+                "no",
+                "off",
+            )
+
+            def _bottom_toolbar() -> str:
+                if not bottom_toolbar_enabled:
+                    return ""
+                cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+                text = f" cwd: {options.cwd} "
+                if cols > 0 and len(text) > cols:
+                    keep = max(0, cols - 2)
+                    return "…" + text[-keep:]
+                return text
+
             def _ptk_prompt_kwargs(*, paste_mode: bool = False) -> dict[str, object]:
                 kwargs: dict[str, object] = {
                     "message": ("paste> " if paste_mode else "oa> "),
@@ -219,6 +236,8 @@ async def run_chat_impl(
                     "cursor": CursorShape.BLINKING_BEAM,
                     "handle_sigint": False,
                 }
+                if bottom_toolbar_enabled:
+                    kwargs["bottom_toolbar"] = _bottom_toolbar
                 return kwargs
 
             prompt_task: asyncio.Task[str] | None = None

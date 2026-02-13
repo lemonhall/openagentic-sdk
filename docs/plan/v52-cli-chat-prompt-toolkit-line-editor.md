@@ -29,7 +29,6 @@
 - 仅在 `stdin.isatty()` 与 `stdout.isatty()` 且 `stdin` 支持 `fileno()` 的情况下启用 Prompt Toolkit；否则保持当前 legacy 行读取路径，避免破坏现有单元测试（StringIO/fake tty）。
 - Prompt Toolkit 模式下，优先保持外部可观察语义稳定：
   - prompt token 仍为 `oa> `
-  - 使用 `show_frame=True` 显示输入框边框（依赖 `prompt_toolkit>=3.0.52`）
   - `/paste ... /end` 与 bracketed paste 继续按“多行 turn 不走命令解析”处理
   - 证据链以 `OPENAGENTIC_SDK_HOME/.../events.jsonl` 为准
 

@@ -21,7 +21,6 @@
 当 `stdin`/`stdout` 都是 TTY 且可用 Prompt Toolkit 时：
 
 - `oa chat` 默认使用 Prompt Toolkit 读取用户输入（支持左右方向键等常见编辑能力）。
-- 输入框启用 `show_frame=True`（依赖 `prompt_toolkit>=3.0.52`），避免手写 prompt 覆盖/重绘冲突。
 - 若不满足（非 TTY、缺少 `fileno()` 等），自动回退到 legacy 行读取实现，确保单元测试与非交互场景稳定。
 
 ### REQ-0052-002 — 可显式选择输入后端（保留 legacy）

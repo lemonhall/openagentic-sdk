@@ -28,26 +28,28 @@ def discover_custom_tool_files(*, project_dir: str) -> list[Path]:
     base = Path(project_dir)
     global_root = _default_global_opencode_config_dir()
 
-    roots: list[Path] = [
-        base / ".opencode",
-        base,
-        global_root,
-    ]
+    # Precedence (low -> high): global < project < .opencode
+    # Rationale: ToolRegistry is "last register wins", so we want higher-precedence
+    # tools to be discovered later.
+    roots: list[Path] = [global_root, base, base / ".opencode"]
     out: list[Path] = []
     for r in roots:
+        # Precedence (low -> high): tool < tools
         for dirname in ("tool", "tools"):
             d = r / dirname
             if not d.exists() or not d.is_dir():
                 continue
-            out.extend([p for p in sorted(d.glob("*.py")) if p.is_file()])
-    # Deterministic ordering.
-    return sorted(out, key=lambda p: str(p))
+            out.extend([p for p in sorted(d.glob("*.py"), key=lambda p: p.name) if p.is_file()])
+    return out
 
 
 def load_custom_tools(*, project_dir: str) -> list[Tool]:
     tools: list[Tool] = []
     for p in discover_custom_tool_files(project_dir=project_dir):
-        mod = _load_module_from_file(p)
+        try:
+            mod = _load_module_from_file(p)
+        except Exception:
+            continue
         items = getattr(mod, "TOOLS", None)
         if isinstance(items, list):
             for t in items:

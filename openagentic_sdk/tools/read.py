@@ -52,9 +52,9 @@ class ReadTool(Tool):
         if limit is not None and (not isinstance(limit, int) or limit < 0):
             raise ValueError("Read: 'limit' must be a non-negative integer")
 
-        data = p.read_bytes()
-        if len(data) > self.max_bytes:
-            data = data[: self.max_bytes]
+        full_data = p.read_bytes()
+        truncated = len(full_data) > self.max_bytes
+        data = full_data[: self.max_bytes] if truncated else full_data
 
         # Image mode (best-effort): return base64 for common image types.
         suffix = p.suffix.lower()
@@ -71,6 +71,7 @@ class ReadTool(Tool):
                 "image": base64.b64encode(data).decode("ascii"),
                 "mime_type": mime,
                 "file_size": len(data),
+                "truncated": truncated,
             }
 
         text = data.decode("utf-8", errors="replace")
@@ -87,6 +88,7 @@ class ReadTool(Tool):
                 "content": numbered,
                 "total_lines": len(lines),
                 "lines_returned": len(slice_lines),
+                "truncated": truncated,
             }
 
-        return {"file_path": str(p), "content": text}
+        return {"file_path": str(p), "content": text, "truncated": truncated}

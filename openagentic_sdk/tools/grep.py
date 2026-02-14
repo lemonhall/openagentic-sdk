@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .base import Tool, ToolContext
+from .path_utils import resolve_tool_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,10 +24,7 @@ class GrepTool(Tool):
             raise ValueError("Grep: 'file_glob' must be a non-empty string")
 
         root_in = tool_input.get("root", tool_input.get("path"))
-        root = Path(ctx.cwd)
-        if root_in is not None:
-            p = Path(str(root_in))
-            root = p if p.is_absolute() else (root / p)
+        root = resolve_tool_path(str(root_in), ctx) if root_in is not None else resolve_tool_path(".", ctx)
 
         flags = 0 if tool_input.get("case_sensitive", True) else re.IGNORECASE
         rx = re.compile(query, flags=flags)

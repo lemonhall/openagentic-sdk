@@ -40,14 +40,12 @@ class TestReadToolEdges(unittest.TestCase):
         tool = ReadTool()
         with TemporaryDirectory() as td:
             root = Path(td)
-            outside = root.parent / "outside.txt"
+            project_root = root / "project"
+            project_root.mkdir()
+            outside = root / "outside.txt"
             outside.write_text("nope", encoding="utf-8")
-            try:
-                with self.assertRaises(ValueError):
-                    tool.run_sync({"file_path": str(outside)}, ToolContext(cwd=str(root), project_dir=str(root)))
-            finally:
-                if outside.exists():
-                    outside.unlink()
+            with self.assertRaises(ValueError):
+                tool.run_sync({"file_path": str(outside)}, ToolContext(cwd=str(project_root), project_dir=str(project_root)))
 
     @unittest.skipUnless(os.name == "nt", "POSIX-like /mnt/... mapping only applies on Windows")
     def test_windows_mnt_data_path_maps_under_project_root(self) -> None:
@@ -72,4 +70,3 @@ class TestReadToolEdges(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

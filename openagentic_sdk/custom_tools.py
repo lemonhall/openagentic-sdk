@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,11 @@ from typing import Any, Iterable, Sequence
 import importlib.util
 
 from .tools.base import Tool
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+LAST_CUSTOM_TOOL_LOAD_ERRORS: list[str] = []
 
 
 def _load_module_from_file(path: Path) -> ModuleType:
@@ -43,12 +49,19 @@ def discover_custom_tool_files(*, project_dir: str) -> list[Path]:
     return out
 
 
-def load_custom_tools(*, project_dir: str) -> list[Tool]:
+def load_custom_tools(*, project_dir: str, errors: list[str] | None = None) -> list[Tool]:
     tools: list[Tool] = []
+    global LAST_CUSTOM_TOOL_LOAD_ERRORS
+    LAST_CUSTOM_TOOL_LOAD_ERRORS = []
     for p in discover_custom_tool_files(project_dir=project_dir):
         try:
             mod = _load_module_from_file(p)
-        except Exception:
+        except Exception as e:
+            msg = f"{p}: {type(e).__name__}: {e}"
+            LAST_CUSTOM_TOOL_LOAD_ERRORS.append(msg)
+            if errors is not None:
+                errors.append(msg)
+            logger.debug("Failed to load custom tool module: %s", p, exc_info=True)
             continue
         items = getattr(mod, "TOOLS", None)
         if isinstance(items, list):

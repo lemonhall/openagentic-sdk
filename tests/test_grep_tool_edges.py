@@ -85,20 +85,18 @@ class TestGrepToolEdges(unittest.TestCase):
         tool = GrepTool()
         with TemporaryDirectory() as td:
             root = Path(td)
-            outside_root = root.parent
+            project_root = root / "project"
+            project_root.mkdir()
+
+            outside_root = root
             (outside_root / "outside.txt").write_text("LEAKME\n", encoding="utf-8")
-            try:
-                with self.assertRaises(ValueError):
-                    tool.run_sync(
-                        {"query": "LEAKME", "file_glob": "outside.txt", "root": str(outside_root)},
-                        ToolContext(cwd=str(root), project_dir=str(root)),
-                    )
-            finally:
-                p = outside_root / "outside.txt"
-                if p.exists():
-                    p.unlink()
+
+            with self.assertRaises(ValueError):
+                tool.run_sync(
+                    {"query": "LEAKME", "file_glob": "outside.txt", "root": str(outside_root)},
+                    ToolContext(cwd=str(project_root), project_dir=str(project_root)),
+                )
 
 
 if __name__ == "__main__":
     unittest.main()
-

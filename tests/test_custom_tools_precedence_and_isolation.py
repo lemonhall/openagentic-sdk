@@ -85,9 +85,11 @@ class TestCustomToolsPrecedenceAndIsolation(unittest.TestCase):
             _write_tool_module(root / ".opencode" / "tools" / "good.py", tool_name="Good", where="ok")
             (root / ".opencode" / "tools" / "bad.py").write_text("raise RuntimeError('boom')\n", encoding="utf-8")
 
-            tools = load_custom_tools(project_dir=str(root))
+            errors: list[str] = []
+            tools = load_custom_tools(project_dir=str(root), errors=errors)
             names = sorted([t.name for t in tools])
             self.assertIn("Good", names)
+            self.assertTrue(any("bad.py" in e for e in errors))
 
     def test_tools_dir_overrides_tool_dir_within_same_root(self) -> None:
         from openagentic_sdk.tools.base import ToolContext

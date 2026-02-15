@@ -184,7 +184,7 @@ Skills 发现路径：
 - 内置一整套 GDScript 的 **IRC client SDK**。
 - 实现基于 IRC 的 RPC 协议，并在其上支持类似 OpenClaw 的多机架构。
 
-### 4）`openagentic-sdk-kotlin`（本仓库，面向 Android）
+### 4）`openagentic-sdk-kotlin`（面向 Android）
 
 - 仓库：`https://github.com/lemonhall/openagentic-sdk-kotlin`
 - 基于 Kotlin 的完整 Agent SDK 架构，主要面向 Android 的可复用核心。

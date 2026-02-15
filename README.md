@@ -263,7 +263,7 @@ Side project built on top of the TS stack:
 - Contains a full-featured **IRC client SDK** for GDScript.
 - Implements an IRC-based RPC protocol and supports a multi-machine architecture (OpenClaw-like).
 
-### 4) `openagentic-sdk-kotlin` (this repo, Android-oriented)
+### 4) `openagentic-sdk-kotlin` (Android-oriented)
 
 - Repo: `https://github.com/lemonhall/openagentic-sdk-kotlin`
 - A full Kotlin SDK architecture intended as a reusable core for Android apps.

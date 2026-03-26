@@ -21,3 +21,11 @@ class CorruptSessionLogError(OpenAgentSdkError, ValueError):
             parts.append(self.reason.strip())
         return " ".join(parts)
 
+
+@dataclass(frozen=True, slots=True)
+class SessionEditConflictError(OpenAgentSdkError, RuntimeError):
+    session_id: str
+
+    def __str__(self) -> str:
+        return f"Session changed while editor was open: session_id={self.session_id}"
+

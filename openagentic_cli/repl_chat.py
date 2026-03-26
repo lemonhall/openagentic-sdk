@@ -167,6 +167,7 @@ async def run_chat_impl(
         # Prompt Toolkit backend (default for true TTYs). This is the most robust path
         # on Windows/ConPTY for editing semantics (arrows/backspace/CJK/typeahead).
         from prompt_toolkit import PromptSession  # noqa: PLC0415
+        from prompt_toolkit.application.current import create_app_session  # noqa: PLC0415
         from prompt_toolkit.completion import (
             WordCompleter,  # noqa: PLC0415
             merge_completers,  # noqa: PLC0415
@@ -176,6 +177,7 @@ async def run_chat_impl(
         from prompt_toolkit.key_binding import KeyBindings  # noqa: PLC0415
         from prompt_toolkit.output.defaults import create_output  # noqa: PLC0415
         from prompt_toolkit.patch_stdout import patch_stdout  # noqa: PLC0415
+        from .session_editor import SESSION_EDITOR_BUSY_REQUEST, SESSION_EDITOR_OPEN_REQUEST, run_session_editor  # noqa: PLC0415
 
         restore_processed: Callable[[], None] | None = None
         restore_sigint = None
@@ -269,10 +271,16 @@ async def run_chat_impl(
             if completers:
                 completer = merge_completers(completers, deduplicate=True)
 
-            slash_kb = None
-            if slash_menu_enabled or skills_menu_enabled:
-                kb = KeyBindings()
+            kb = KeyBindings()
 
+            @kb.add("f12")  # type: ignore[misc]
+            def _open_session_editor(event) -> None:  # noqa: ANN001
+                if current_abort_event is not None:
+                    event.app.exit(result=SESSION_EDITOR_BUSY_REQUEST)
+                    return
+                event.app.exit(result=SESSION_EDITOR_OPEN_REQUEST)
+
+            if slash_menu_enabled or skills_menu_enabled:
                 @kb.add("/")  # type: ignore[misc]
                 def _slash_opens_menu(event) -> None:  # noqa: ANN001
                     buf = event.app.current_buffer
@@ -297,8 +305,6 @@ async def run_chat_impl(
                         buf.apply_completion(buf.complete_state.current_completion)
                         return
                     buf.validate_and_handle()
-
-                slash_kb = kb
 
             bottom_toolbar_enabled = os.getenv("OA_CLI_BOTTOM_TOOLBAR", "1").strip().lower() not in (
                 "0",
@@ -325,7 +331,7 @@ async def run_chat_impl(
                     "wrap_lines": True,
                     "cursor": CursorShape.BLINKING_BEAM,
                     "completer": completer,
-                    "key_bindings": slash_kb,
+                    "key_bindings": kb,
                     "complete_while_typing": False,
                     "reserve_space_for_menu": 6 if (slash_menu_enabled or skills_menu_enabled) else 0,
                     "handle_sigint": False,
@@ -334,11 +340,15 @@ async def run_chat_impl(
                     kwargs["bottom_toolbar"] = _bottom_toolbar
                 return kwargs
 
-            prompt_task: asyncio.Task[str] | None = None
+            prompt_task: asyncio.Task[object] | None = None
+            prefetched_line: object | None = None
             try:
                 while True:
                     try:
-                        if prompt_task is not None:
+                        if prefetched_line is not None:
+                            line = prefetched_line
+                            prefetched_line = None
+                        elif prompt_task is not None:
                             line = await prompt_task
                             prompt_task = None
                         else:
@@ -349,6 +359,31 @@ async def run_chat_impl(
                     except KeyboardInterrupt:
                         # Ctrl+C at prompt: do not create a user turn.
                         prompt_task = None
+                        continue
+
+                    if line == SESSION_EDITOR_BUSY_REQUEST:
+                        _print(stdout, dim("session editor unavailable while busy", enabled=enable_color))
+                        continue
+                    if line == SESSION_EDITOR_OPEN_REQUEST:
+                        if not session_id:
+                            _print(stdout, dim("current session is empty; nothing to edit", enabled=enable_color))
+                            continue
+                        with create_app_session(input=ptk_in, output=ptk_out):
+                            outcome = await run_session_editor(store=store, session_id=session_id)
+                        if outcome.status == "saved":
+                            _print(stdout, dim("session updated", enabled=enable_color))
+                        elif outcome.status == "conflict":
+                            _print(stdout, fg_red("session editor save failed: session changed", enabled=enable_color))
+                        elif outcome.status == "error":
+                            _print(
+                                stdout,
+                                fg_red(
+                                    outcome.message or "session editor save failed",
+                                    enabled=enable_color,
+                                ),
+                            )
+                        elif outcome.status == "empty":
+                            _print(stdout, dim("current session has no editable messages", enabled=enable_color))
                         continue
 
                     turn_obj = ReplTurn(line, is_paste=("\n" in line))
@@ -469,9 +504,55 @@ async def run_chat_impl(
                                     prompt_task = None
                                     abort_event.set()
                                     raise KeyboardInterrupt
+                                if exc is None:
+                                    result = None
+                                    try:
+                                        result = prompt_task.result()
+                                    except asyncio.CancelledError:
+                                        result = None
+                                    except Exception:
+                                        result = None
+                                    if result == SESSION_EDITOR_BUSY_REQUEST:
+                                        _print(stdout, dim("session editor unavailable while busy", enabled=enable_color))
+                                        prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
+                                    elif result == SESSION_EDITOR_OPEN_REQUEST:
+                                        _print(stdout, dim("session editor unavailable while busy", enabled=enable_color))
+                                        prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
+                                    elif result is not None:
+                                        prefetched_line = result
+                                        prompt_task = None
                             if os.name == "nt" and _windows_ctrl_c_consume():
                                 abort_event.set()
                                 raise KeyboardInterrupt
+                        if prompt_task is not None and prompt_task.done():
+                            exc = None
+                            try:
+                                exc = prompt_task.exception()
+                            except asyncio.CancelledError:
+                                exc = None
+                            except Exception:
+                                exc = None
+                            if isinstance(exc, KeyboardInterrupt):
+                                prompt_task = None
+                                abort_event.set()
+                                raise KeyboardInterrupt
+                            if exc is None:
+                                result = None
+                                try:
+                                    result = prompt_task.result()
+                                except asyncio.CancelledError:
+                                    result = None
+                                except Exception:
+                                    result = None
+                                if result == SESSION_EDITOR_BUSY_REQUEST:
+                                    _print(stdout, dim("session editor unavailable while busy", enabled=enable_color))
+                                    prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
+                                elif result == SESSION_EDITOR_OPEN_REQUEST:
+                                    _print(stdout, dim("session editor unavailable while busy", enabled=enable_color))
+                                    prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
+                                elif result is not None:
+                                    prefetched_line = result
+                                    prompt_task = None
                         # Visual separation: keep one blank line between the end of the assistant/tool output
                         # and the user's next prompt line.
                         _print(stdout, "")

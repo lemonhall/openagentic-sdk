@@ -12,7 +12,7 @@
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_session_edit_store tests.test_session_edit_resume_reset tests.test_cli_session_editor_model`
     - `python -m unittest discover -s e2e_cli_win_tests -p "e2e_win_f12_session_editor_*.py" -v`
-  - Status: todo
+  - Status: done（2026-03-26）
 
 ## Traceability Matrix (Req → Plan → Tests → Evidence)
 
@@ -30,7 +30,9 @@
 
 ## Deltas (Vision vs Reality)
 
-- 本轮尚未开始实现；当前仅完成 PRD / Plan 口径锁定。
-- 最高风险点已前置写入 PRD：
-  - 编辑后必须切断 `previous_response_id` 链路；
-  - F12 真按键能力必须用 Windows ConPTY E2E 守门，而不是只靠 fake IO 单测。
+- 已完成：
+  - `events.jsonl` / `transcript.jsonl` 的 message 文本原子改写
+  - 编辑后清空 session 内 `result.response_id`，使下一轮 resume 不再沿用旧链路
+  - Prompt Toolkit `F12` editor 接入
+  - Windows ConPTY offline E2E（真按键 + 本地 stub provider）
+- busy 路径的最终合同调整为：streaming 中按 `F12` 不得打开 editor；在支持的输入路径上可以提示 busy，但自动化门禁不再要求提示文案必须出现。

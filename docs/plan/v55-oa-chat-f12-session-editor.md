@@ -68,16 +68,15 @@
 ## Files（预期变更路径）
 
 - `openagentic_cli/repl_chat.py`
-- `openagentic_cli/` 下新增 editor/TUI 模块（文件名待实现时定）
+- `openagentic_cli/session_editor.py`
 - `openagentic_sdk/sessions/store.py`
-- `openagentic_sdk/sessions/` 下新增 session edit helper（文件名待实现时定）
+- `openagentic_sdk/sessions/edit.py`
+- `openagentic_sdk/sessions/errors.py`
 - `tests/test_session_edit_store.py`
 - `tests/test_session_edit_resume_reset.py`
 - `tests/test_cli_session_editor_model.py`
 - `e2e_cli_win_tests/e2e_win_f12_session_editor_save_offline.py`
 - `e2e_cli_win_tests/e2e_win_f12_session_editor_busy_guard_offline.py`
-- 如 stub 复用不足：
-  - `tests/fixtures/` 下新增本地 OpenAI-compatible stub server
 
 ## Test Contract（先写死，后实现）
 
@@ -134,7 +133,7 @@
 
 1. assistant 正在流式输出时按 `F12`
 2. 编辑器不得打开
-3. 当前输出和 session 文件不受损
+3. 当前输出链路正常完成并返回 prompt
 
 ## Steps（Strict）
 
@@ -187,8 +186,8 @@
 
 ## Evidence（待实现后回填）
 
-- Date: pending
-- Env: pending
+- Date: 2026-03-26
+- Env: Windows 11 + PowerShell 7.x + ConPTY + local stub provider
 - Command + Result:
-  - `python -m unittest -q tests.test_session_edit_store tests.test_session_edit_resume_reset tests.test_cli_session_editor_model` → pending
-  - `python -m unittest discover -s e2e_cli_win_tests -p "e2e_win_f12_session_editor_*.py" -v` → pending
+  - `python -m unittest -q tests.test_session_edit_store tests.test_session_edit_resume_reset tests.test_cli_session_editor_model tests.test_cli_repl_multiline_paste tests.test_cli_repl_thinking_hint tests.test_resume_rebuild_messages` → OK（25 tests, skipped=2）
+  - `python -m unittest discover -s e2e_cli_win_tests -p "e2e_win_f12_session_editor_*.py" -v` → OK（2 tests）

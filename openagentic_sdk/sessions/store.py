@@ -13,7 +13,16 @@ from typing import Any, Iterable, Optional
 from ..events import AssistantDelta, Event, SessionCheckpoint, SessionRedo, SessionSetHead, SessionUndo
 from ..serialization import event_to_dict, loads_event
 from .paths import events_path, meta_path, session_dir, transcript_path
-from .errors import CorruptSessionLogError
+from .edit import (
+    EditableSessionMessage,
+    apply_message_text_edit,
+    atomic_write_text,
+    list_editable_messages,
+    render_events_jsonl,
+    render_transcript_jsonl,
+    session_fingerprint_from_path,
+)
+from .errors import CorruptSessionLogError, SessionEditConflictError
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +217,44 @@ class FileSessionStore:
     def append_events(self, session_id: str, events: Iterable[Event]) -> None:
         for e in events:
             self.append_event(session_id, e)
+
+    def session_fingerprint(self, session_id: str) -> str:
+        _ = self.session_dir(session_id)
+        return session_fingerprint_from_path(events_path(self.root_dir, session_id))
+
+    def list_editable_messages(self, session_id: str) -> list[EditableSessionMessage]:
+        return list_editable_messages(self.read_events(session_id))
+
+    def edit_message_text(
+        self,
+        session_id: str,
+        *,
+        seq: int,
+        new_text: str,
+        expected_fingerprint: str | None = None,
+    ) -> bool:
+        if not isinstance(seq, int) or seq <= 0:
+            raise ValueError("seq must be a positive int")
+        if not isinstance(new_text, str):
+            raise ValueError("new_text must be a string")
+
+        _ = self.session_dir(session_id)
+        with self._session_lock(session_id):
+            events_file = events_path(self.root_dir, session_id)
+            current_fingerprint = session_fingerprint_from_path(events_file)
+            if expected_fingerprint is not None and expected_fingerprint != current_fingerprint:
+                raise SessionEditConflictError(session_id=session_id)
+
+            events = self.read_events(session_id)
+            updated_events, changed = apply_message_text_edit(events, seq=seq, new_text=new_text)
+            if not changed:
+                return False
+
+            atomic_write_text(events_file, render_events_jsonl(updated_events))
+            atomic_write_text(transcript_path(self.root_dir, session_id), render_transcript_jsonl(updated_events))
+            seqs = [getattr(event, "seq", None) for event in updated_events]
+            self._seq[session_id] = max((int(s) for s in seqs if isinstance(s, int)), default=0)
+            return True
 
     # Session timeline helpers (append-only).
 

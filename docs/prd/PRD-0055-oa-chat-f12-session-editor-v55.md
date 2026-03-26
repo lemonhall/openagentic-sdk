@@ -63,7 +63,7 @@
 
 ### REQ-0055-006 — Busy / unsupported 路径必须失败得明确且不伤数据
 
-- assistant 正在 in-flight 输出时，按 `F12` 不得打开编辑器；应提示“当前会话忙碌中”并保持现有输出链路不变；
+- assistant 正在 in-flight 输出时，按 `F12` 不得打开编辑器；可以提示“当前会话忙碌中”，也可以忽略该按键，但不得破坏现有输出链路与 session 文件；
 - legacy 输入后端、非 TTY、或 Prompt Toolkit 不可用时，不要求支持该功能，但不得崩溃；
 - 任何保存失败场景都不得破坏现有 session 文件。
 

@@ -112,6 +112,8 @@ uv run oa chat
 如果你要用 `WebSearch`（Tavily），需要：
 
 - `TAVILY_API_KEY`
+- `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT`（可选；当设置了 `TAVILY_API_KEY` 时默认启用）
+- `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT_DEPTH`（可选；`basic` / `advanced`，默认 `advanced`）
 
 ## 内置 Tools
 
@@ -120,7 +122,7 @@ uv run oa chat
 - `Read`, `Write`, `Edit`
 - `Glob`, `Grep`
 - `Bash`
-- `WebFetch`
+- `WebFetch`（默认直连 HTTP(S)；当设置了 `TAVILY_API_KEY` 时，遇到反爬/JS 空壳页会自动回退到 Tavily Extract）
 - `WebSearch`（需要 `TAVILY_API_KEY`）
 - `TodoWrite`
 - `SlashCommand`（加载 `.claude/commands/<name>.md`）

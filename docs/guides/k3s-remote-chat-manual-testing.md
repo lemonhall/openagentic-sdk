@@ -146,6 +146,7 @@ git rev-parse --short HEAD
 ```text
 RIGHTCODE_BASE_URL=...
 RIGHTCODE_API_KEY=...
+TAVILY_API_KEY=...
 ```
 
 如果你在 Windows 11 本机用 k3d，并且希望 real cluster 内的 `WebSearch` / `WebFetch` 能借助本机代理出网，先启动一个 WSL host relay，再把 proxy env 写进 `.openagentic.remote.env`。
@@ -168,6 +169,16 @@ wsl -u root -e bash -lc 'if [ -f /tmp/oa-k3d-proxy-relay.pid ]; then kill $(cat 
 HTTP_PROXY=http://host.k3d.internal:17897
 HTTPS_PROXY=http://host.k3d.internal:17897
 NO_PROXY=127.0.0.1,localhost,.svc,.cluster.local
+```
+
+补充说明：
+
+- 现在 `WebFetch` 在 pod 内遇到典型反爬页或 JS 空壳页时，会尝试 Tavily Extract fallback；
+- 所以如果你希望 `research` 的网页抓取更稳定，`TAVILY_API_KEY` 也应写进 `.openagentic.remote.env`；
+- 如需强制关闭这个 fallback，可以额外写：
+
+```text
+OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT=0
 ```
 
 说明：

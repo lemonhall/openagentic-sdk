@@ -27,11 +27,11 @@ def build_tool_schemas(
         return tool_schemas_for_openai(
             tool_names,
             registry=options.tools,
-            context={"cwd": options.cwd, "project_dir": options.project_dir},
+            context={"cwd": options.cwd, "project_dir": options.project_dir, "agents": options.agents},
         )
     return tool_schemas_for_responses(
         tool_names,
         registry=options.tools,
-        context={"cwd": options.cwd, "project_dir": options.project_dir},
+        context={"cwd": options.cwd, "project_dir": options.project_dir, "agents": options.agents},
     )
 

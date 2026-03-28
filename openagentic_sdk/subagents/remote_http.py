@@ -130,6 +130,26 @@ class RemoteTaskHttpWorkerServer:
         worker = InProcessRemoteTaskWorker(base_options=self._base_options, session_store=self._session_store)
         repo_root = self._repo_root
         node_name = self._node_name
+        execution_slots: threading.BoundedSemaphore | None = None
+        execution_slot_limit: int | None = None
+        execution_slots_lock = threading.Lock()
+
+        def _execution_slots_for(limit: int) -> threading.BoundedSemaphore:
+            nonlocal execution_slots
+            nonlocal execution_slot_limit
+            if limit <= 0:
+                raise RuntimeError("worker max_concurrent_tasks must be positive")
+            with execution_slots_lock:
+                if execution_slots is None:
+                    execution_slots = threading.BoundedSemaphore(limit)
+                    execution_slot_limit = limit
+                elif execution_slot_limit != limit:
+                    raise RuntimeError(
+                        "remote worker max_concurrent_tasks mismatch: "
+                        f"existing {execution_slot_limit}, requested {limit}"
+                    )
+                assert execution_slots is not None
+                return execution_slots
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
@@ -177,23 +197,28 @@ class RemoteTaskHttpWorkerServer:
                         cwd=repo_root,
                         project_dir=repo_root,
                     )
-                    handle = asyncio.run(worker.dispatch(effective_request))
+                    slots = _execution_slots_for(effective_request.definition.worker.max_concurrent_tasks)
+                    slots.acquire()
+                    try:
+                        handle = asyncio.run(worker.dispatch(effective_request))
 
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-                    self.send_header("X-OA-Child-Session-ID", handle.child_session_id)
-                    self.send_header("X-OA-Target-Node", handle.target_node)
-                    self.send_header("X-OA-Git-Revision", handle.git_revision)
-                    self.send_header("X-OA-Worker-Execution-ID", handle.worker_execution_id or "")
-                    self.end_headers()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                        self.send_header("X-OA-Child-Session-ID", handle.child_session_id)
+                        self.send_header("X-OA-Target-Node", handle.target_node)
+                        self.send_header("X-OA-Git-Revision", handle.git_revision)
+                        self.send_header("X-OA-Worker-Execution-ID", handle.worker_execution_id or "")
+                        self.end_headers()
 
-                    async def _stream() -> None:
-                        async for event in handle.events:
-                            raw = json.dumps(event_to_dict(event), ensure_ascii=False).encode("utf-8") + b"\n"
-                            self.wfile.write(raw)
-                            self.wfile.flush()
+                        async def _stream() -> None:
+                            async for event in handle.events:
+                                raw = json.dumps(event_to_dict(event), ensure_ascii=False).encode("utf-8") + b"\n"
+                                self.wfile.write(raw)
+                                self.wfile.flush()
 
-                    asyncio.run(_stream())
+                        asyncio.run(_stream())
+                    finally:
+                        slots.release()
                 except Exception as e:  # noqa: BLE001
                     _write_json(self, 500, {"error": str(e)})
 
@@ -271,6 +296,7 @@ def _definition_to_dict(definition: AgentDefinition) -> dict[str, Any]:
         "worker": {
             "profile": definition.worker.profile,
             "image": definition.worker.image,
+            "max_concurrent_tasks": definition.worker.max_concurrent_tasks,
         },
     }
 
@@ -300,5 +326,6 @@ def _definition_from_dict(raw: Any) -> AgentDefinition:
         worker=AgentWorkerDefinition(
             profile=(str(worker_obj.get("profile")) if isinstance(worker_obj.get("profile"), str) else None),
             image=(str(worker_obj.get("image")) if isinstance(worker_obj.get("image"), str) else None),
+            max_concurrent_tasks=int(worker_obj.get("max_concurrent_tasks") or 3),
         ),
     )

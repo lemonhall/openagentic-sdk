@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import threading
 import unittest
@@ -27,6 +28,34 @@ class HttpWorkerChildProvider:
         if isinstance(user_text, str) and user_text.startswith("REMOTE_HTTP_DEF:"):
             return ModelOutput(assistant_text="remote http ok", tool_calls=[], usage=None, raw=None)
         return ModelOutput(assistant_text="unexpected", tool_calls=[], usage=None, raw=None)
+
+
+class BlockingHttpWorkerChildProvider:
+    name = "http-child-blocking"
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = tools
+        _ = api_key
+        user_text = next((m.get("content") for m in messages if m.get("role") == "user"), "")
+        if not isinstance(user_text, str) or not user_text.startswith("REMOTE_HTTP_DEF:"):
+            return ModelOutput(assistant_text="unexpected", tool_calls=[], usage=None, raw=None)
+        with self._lock:
+            self.active += 1
+            if self.active > self.max_active:
+                self.max_active = self.active
+            self.started.set()
+        await asyncio.to_thread(self.release.wait)
+        with self._lock:
+            self.active -= 1
+        return ModelOutput(assistant_text="remote http ok", tool_calls=[], usage=None, raw=None)
 
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
@@ -99,6 +128,79 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(getattr(event, "agent_name", None) == "worker_remote" for event in child_events))
         self.assertTrue(all(getattr(event, "parent_tool_use_id", None) == "call_task" for event in child_events))
         self.assertEqual(getattr(child_events[-1], "final_text", None), "remote http ok")
+
+    async def test_http_remote_worker_limits_concurrency_and_queues_excess_requests(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            provider = BlockingHttpWorkerChildProvider()
+            definition = AgentDefinition(
+                description="remote child",
+                prompt="REMOTE_HTTP_DEF: follow instructions",
+                tools=("Read",),
+                executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                workspace=AgentWorkspaceDefinition(mode="readonly"),
+            )
+            base_options = OpenAgenticOptions(
+                provider=provider,
+                model="fake",
+                api_key="x",
+                cwd=str(repo_root),
+                project_dir=str(repo_root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={"worker_remote": definition},
+            )
+            worker_server = RemoteTaskHttpWorkerServer(
+                base_options=base_options,
+                session_store=store,
+                repo_root=str(repo_root),
+                node_name="node-http",
+                host="127.0.0.1",
+                port=0,
+            )
+            httpd = worker_server.make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                dispatcher = HttpRemoteTaskDispatcher(base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
+
+                async def _dispatch_one(i: int):
+                    request = RemoteTaskRequest(
+                        parent_session_id=f"{i:032d}"[-32:],
+                        parent_tool_use_id=f"call_task_{i}",
+                        agent_name="worker_remote",
+                        prompt=f"Do remote child work {i}",
+                        definition=definition,
+                        cwd=str(repo_root),
+                        project_dir=str(repo_root),
+                        git_revision=git_revision,
+                    )
+                    handle = await dispatcher.dispatch(request)
+                    return [event async for event in handle.events]
+
+                tasks = [asyncio.create_task(_dispatch_one(i)) for i in range(4)]
+                await asyncio.sleep(1.0)
+                self.assertEqual(provider.max_active, 3)
+                self.assertFalse(all(task.done() for task in tasks))
+                provider.release.set()
+                results = await asyncio.gather(*tasks)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertEqual(provider.max_active, 3)
+        self.assertEqual(len(results), 4)
+        for child_events in results:
+            self.assertEqual(getattr(child_events[-1], "final_text", None), "remote http ok")
 
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)

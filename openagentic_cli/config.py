@@ -90,6 +90,20 @@ def _expect_tool_list(value: Any, *, agent_name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value)
 
 
+def _expect_optional_positive_int(value: Any, *, field_name: str, agent_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise SystemExit(f"Invalid agent '{agent_name}': {field_name} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as e:
+        raise SystemExit(f"Invalid agent '{agent_name}': {field_name} must be a positive integer") from e
+    if parsed <= 0:
+        raise SystemExit(f"Invalid agent '{agent_name}': {field_name} must be a positive integer")
+    return parsed
+
+
 def _build_agents_from_config(cfg: Mapping[str, Any] | None) -> dict[str, AgentDefinition]:
     if not isinstance(cfg, Mapping):
         return {}
@@ -146,6 +160,11 @@ def _build_agents_from_config(cfg: Mapping[str, Any] | None) -> dict[str, AgentD
         worker_image = _expect_optional_string(worker_raw.get("image"), field_name="worker.image", agent_name=name)
         if worker_image is None:
             worker_image = _expect_optional_string(raw_spec.get("image"), field_name="image", agent_name=name)
+        max_concurrent_tasks = _expect_optional_positive_int(
+            worker_raw.get("max_concurrent_tasks"),
+            field_name="worker.max_concurrent_tasks",
+            agent_name=name,
+        )
 
         out[name] = AgentDefinition(
             description=description,
@@ -154,7 +173,11 @@ def _build_agents_from_config(cfg: Mapping[str, Any] | None) -> dict[str, AgentD
             model=model,
             executor=AgentExecutorDefinition(kind=kind, node_name=node_name),
             workspace=AgentWorkspaceDefinition(mode=workspace_mode),
-            worker=AgentWorkerDefinition(profile=worker_profile, image=worker_image),
+            worker=AgentWorkerDefinition(
+                profile=worker_profile,
+                image=worker_image,
+                max_concurrent_tasks=max_concurrent_tasks or 3,
+            ),
         )
     return out
 

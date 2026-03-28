@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import threading
 import time
@@ -105,6 +106,103 @@ class _RecordingRemoteDispatcher:
         )
 
 
+class _SequencedRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+        final_text = f"{request.agent_name} done on {request.definition.executor.node_name}"
+
+        async def _events():
+            yield AssistantMessage(
+                text=f"{request.agent_name} says hi",
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+            yield Result(
+                final_text=final_text,
+                session_id=("b" * 32)[:-len(request.agent_name)] + request.agent_name[: len(request.agent_name)],
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+
+        return request.make_handle(
+            child_session_id="b" * 32,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id=f"exec-{request.agent_name}",
+            events=_events(),
+        )
+
+
+class _NaturalLanguageBridgeProvider:
+    name = "bridge-nl"
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = tools
+        _ = api_key
+        user_messages = [m.get("content") for m in messages if m.get("role") == "user"]
+        user_text = user_messages[-1] if user_messages else ""
+        last_user_index = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=-1)
+        tool_outputs = self._decode_tool_outputs(messages[last_user_index + 1 :])
+
+        if isinstance(user_text, str) and "你好" in user_text and not tool_outputs:
+            return ModelOutput(assistant_text="你好，我可以先研究再写作。", tool_calls=[], usage=None, raw=None)
+
+        if isinstance(user_text, str) and "先研究" in user_text and "摘要" in user_text:
+            if "research_step" not in tool_outputs:
+                return ModelOutput(
+                    assistant_text=None,
+                    tool_calls=[
+                        ToolCall(
+                            tool_use_id="research_step",
+                            name="Task",
+                            arguments={"agent": "research", "prompt": "RESEARCH_TOPIC::bridge"},
+                        )
+                    ],
+                    usage=None,
+                    raw=None,
+                )
+            if "writer_step" not in tool_outputs:
+                research_final = self._task_final_text(tool_outputs.get("research_step")) or "missing"
+                return ModelOutput(
+                    assistant_text=None,
+                    tool_calls=[
+                        ToolCall(
+                            tool_use_id="writer_step",
+                            name="Task",
+                            arguments={"agent": "writer", "prompt": f"WRITER_DRAFT::{research_final}"},
+                        )
+                    ],
+                    usage=None,
+                    raw=None,
+                )
+            return ModelOutput(assistant_text="serial route ok", tool_calls=[], usage=None, raw=None)
+
+        return ModelOutput(assistant_text="host ok", tool_calls=[], usage=None, raw=None)
+
+    def _decode_tool_outputs(self, messages) -> dict[str, object]:
+        outputs: dict[str, object] = {}
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "tool":
+                continue
+            call_id = message.get("tool_call_id")
+            content = message.get("content")
+            if not isinstance(call_id, str) or not isinstance(content, str):
+                continue
+            outputs[call_id] = json.loads(content)
+        return outputs
+
+    def _task_final_text(self, payload: object) -> str | None:
+        if isinstance(payload, dict):
+            final_text = payload.get("final_text")
+            if isinstance(final_text, str) and final_text:
+                return final_text
+        return None
+
+
 class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
     async def test_cluster_chat_client_keeps_sse_open_while_host_is_temporarily_idle(self) -> None:
         from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
@@ -203,6 +301,71 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
             finally:
                 httpd.shutdown()
                 httpd.server_close()
+
+    async def test_cluster_chat_client_can_follow_serial_natural_language_route(self) -> None:
+        from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = _SequencedRemoteDispatcher()
+            options = OpenAgenticOptions(
+                provider=_NaturalLanguageBridgeProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "research": AgentDefinition(
+                        description="Research worker",
+                        prompt="REMOTE_RESEARCH_DEF",
+                        tools=("Read", "WebSearch"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    ),
+                    "writer": AgentDefinition(
+                        description="Writer worker",
+                        prompt="REMOTE_WRITER_DEF",
+                        tools=("Read",),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-b"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    ),
+                },
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = ClusterChatClient(base_url=f"http://127.0.0.1:{httpd.server_address[1]}", timeout_s=1.0)
+                events = [e async for e in client.query(prompt="请先研究这个主题，再给我一个摘要。")]
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
+        self.assertEqual([request.agent_name for request in dispatcher.requests], ["research", "writer"])
+        self.assertEqual([request.definition.executor.node_name for request in dispatcher.requests], ["node-a", "node-b"])
+
+        task_results = [
+            e
+            for e in events
+            if getattr(e, "type", None) == "tool.result"
+            and isinstance(getattr(e, "output", None), dict)
+            and getattr(e, "output", {}).get("dispatch_mode") == "k3s"
+        ]
+        self.assertEqual(len(task_results), 2)
+        self.assertEqual(task_results[0].output["target_node"], "node-a")
+        self.assertEqual(task_results[1].output["target_node"], "node-b")
+        self.assertEqual(getattr(events[-1], "final_text", None), "serial route ok")
 
     async def test_run_chat_uses_remote_bridge_when_base_url_is_configured(self) -> None:
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer

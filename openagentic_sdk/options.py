@@ -28,6 +28,7 @@ class AgentWorkspaceDefinition:
 class AgentWorkerDefinition:
     profile: str | None = None
     image: str | None = None
+    max_concurrent_tasks: int = 3
 
 
 @dataclass(frozen=True, slots=True)

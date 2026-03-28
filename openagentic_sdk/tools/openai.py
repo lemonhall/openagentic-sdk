@@ -2,10 +2,30 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from openagentic_sdk.options import AgentDefinition
 from openagentic_sdk.skills.index import index_skills
 from openagentic_sdk.tool_prompts import render_tool_prompt
 
 from .registry import ToolRegistry
+
+
+def _render_task_agents(raw_agents: Any) -> str:
+    if not isinstance(raw_agents, Mapping) or not raw_agents:
+        return "  (none configured)"
+
+    blocks: list[str] = []
+    for agent_name, raw_definition in raw_agents.items():
+        if not isinstance(agent_name, str) or not agent_name:
+            continue
+        if not isinstance(raw_definition, AgentDefinition):
+            continue
+        tools = ", ".join(raw_definition.tools) if raw_definition.tools else "(inherit/default)"
+        node_name = raw_definition.executor.node_name or "(none)"
+        blocks.append(f'- "{agent_name}": {raw_definition.description}')
+        blocks.append(f"  tools: {tools}")
+        blocks.append(f"  executor: {raw_definition.executor.kind}")
+        blocks.append(f"  node_name: {node_name}")
+    return "\n".join(blocks) if blocks else "  (none configured)"
 
 
 def tool_schemas_for_openai(
@@ -37,6 +57,7 @@ def tool_schemas_for_openai(
         "maxBytes": bash_max_bytes,
         "maxLines": bash_max_lines,
         "project_dir": project_dir or "",
+        "agents": _render_task_agents(ctx.get("agents")),
     }
 
     schemas: dict[str, Mapping[str, Any]] = {

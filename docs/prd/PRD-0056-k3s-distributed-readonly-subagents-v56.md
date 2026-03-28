@@ -17,6 +17,8 @@
 - v56 不做生产级 HA、自动扩缩容、多租户隔离、跨集群调度。
 - v56 不做 Windows 原生 K3s 节点；本地实验集群以 Linux 节点为前提。
 - v56 不尝试用 Kubernetes Job 替代全部现有子会话语义；第一版以“保持父子会话事件流语义”为最高优先级。
+- v56 M4 不做多供应商 fallback，不做每个 agent 独立 secret 文件，不做 Secret/operator 化。
+- v56 M4 不要求 remote worker 在启动时主动调用真实模型 API 做探活；启动自检只覆盖配置与最低必需项完整性。
 
 ## Requirements
 
@@ -166,6 +168,64 @@
   - 用户自然语言要求“先研究后写作”时，主会话会先派 `research` 再派 `writer`
   - 用户自然语言要求“从多个方向并发研究并汇总”时，主会话可并发派发多个研究子任务，再自行汇总
   - 上述 fan-out 场景不突破单 worker 的并发上限 contract
+
+### REQ-0056-015 — 真模型远程模式必须使用独立于本地 `oa chat` 的 remote cluster 配置层
+
+- v56 M4 必须引入一套独立的远程集群配置真值源，而不是直接复用本地 `oa chat` 的 provider 配置入口。
+- 该配置层至少由两部分构成：
+  - `openagentic.remote.json`：结构化声明 host、remote agents、provider profile、node 绑定、prompt、tools、workspace、worker 并发等；
+  - `.openagentic.remote.env`：仅存在于主控机器的明文密钥/URL 配置文件，不进入 Git。
+- `openagentic.remote.json` 必须允许：
+  - 定义 host 自己使用哪个 provider profile / model；
+  - 定义每个 remote subagent 使用哪个 provider profile / model；
+  - 未来允许 host 与不同 remote subagent 选择不同供应商。
+- 本地单机 `oa chat` 的默认配置链不得因为引入远程集群配置而改变语义；remote cluster mode 必须是分层而非覆盖。
+
+### REQ-0056-016 — 远程集群密钥必须通过控制端 `.env` 注入到运行环境，而不是挂载明文密钥文件到节点
+
+- `.openagentic.remote.env` 中可以存放当前 remote cluster 所需的明文密钥与 URL；该文件必须加入 `.gitignore`。
+- 集群创建、重建、部署重启时，框架必须能够读取 `.openagentic.remote.env`，并把其中需要的值注入到 host / worker 的运行环境。
+- 节点/POD 内不得依赖挂载 `.openagentic.remote.env` 明文文件；节点只接收展开后的环境变量。
+- 如果 `openagentic.remote.json` 中声明的 provider profile 需要某些环境变量，而部署时未注入这些变量，部署/自检必须明确失败。
+- 第一版可以接受“运行中 pod 环境变量可见”这一现实约束，但不得把密钥明文写入仓库或 cluster 工作区文件。
+
+### REQ-0056-017 — host 必须解析 agent 的真实 provider spec，并在远程派发时下发给 worker
+
+- `cluster host` 启动时必须基于 `openagentic.remote.json` 和运行环境，解析出：
+  - host 自己的 provider/model；
+  - 每个 remote subagent 的 provider/model；
+  - provider profile 所需的 `base_url` / `api_key` / 协议类型等最小可执行信息。
+- 远程 `Task` 请求不再只传 agent 名字、prompt、workspace、node 等元数据；还必须携带目标 agent 的已解析 provider spec。
+- `remote worker` 不得再次走本地 CLI provider 配置猜测逻辑；它必须消费 host 下发的 provider spec 来构造真实 provider 并运行 child runtime。
+- agent 级别允许覆盖 `model`；未来允许覆盖到不同 provider profile，但第一版不要求 agent 自带独立 secret 文件。
+- 只要目标 agent 配置的是可用的真实 provider，worker 返回的内容必须来自真实模型调用，而不是 smoke rule engine 或硬编码分支。
+
+### REQ-0056-018 — host / worker 启动后必须做 provider 自检，并把结果暴露到健康状态中
+
+- `cluster host` 和 `remote worker` 在启动后都必须执行一次轻量自检，至少验证：
+  - remote 配置文件存在且可解析；
+  - 本进程可能使用到的 provider profile 定义完整；
+  - 对应 provider 所需的最小环境变量齐全；
+  - 默认 model / agent override model 可解析。
+- 自检失败时，服务不得伪装成“ready”；必须通过 readiness / health 暴露失败状态和简要原因。
+- `/health` 或等价接口除 `ok` 外，至少还要返回：
+  - `provider_ready`
+  - `provider_profiles`
+  - `node_name` / `host_node_name`
+  - `config_source`
+- v56 M4 明确不要求在启动时主动发起真实模型 API 调用做探活，以避免额外费用、启动抖动和供应商瞬时错误影响 ready 判定。
+
+### REQ-0056-019 — smoke cluster 与 real-model cluster 必须并存，且验收必须证明“真 agent 不再返回 smoke 固定回复”
+
+- 现有 smoke provider / smoke deployment 不得删除；它仍然用于低成本协议回归与离线 k3d 测试。
+- 必须新增一套 real-model remote cluster 路径，使用 `openagentic.remote.json + .openagentic.remote.env` 驱动。
+- 文档必须明确区分：
+  - smoke cluster 的 bring-up / test 方法；
+  - real-model cluster 的 bring-up / test 方法。
+- M4 的手工或半自动验收必须至少证明：
+  - 主会话对普通闲聊问题不再只返回 smoke 的固定兜底文本；
+  - remote `research` / `writer` 结果来自真实 provider，而不是 `_smoke_provider.py` 的固定模板；
+  - 用户一次真实交互里可以观察到主会话与 remote subagent 都具备真实模型语义。
 
 ## Acceptance (DoD)
 

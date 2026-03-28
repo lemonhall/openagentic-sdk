@@ -1,0 +1,10 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: v56-openagentic
+servers: 1
+agents: 2
+volumes:
+  - volume: __OA_REPO_ROOT__:/var/lib/openagentic/repo
+    nodeFilters:
+      - all

@@ -33,7 +33,7 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_openai_tool_schemas tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_http_transport tests.test_remote_chat_bridge`
     - `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_*.py\" -v"'`
-  - Status: in_progress（2026-03-28；文档已立项，待实现）
+  - Status: done（2026-03-28；自然语言路由、串行/并发 smoke、worker 默认并发 3 均已验证）
 
 ## Plan Index
 
@@ -53,10 +53,10 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - REQ-0056-008 → `docs/plan/v56-k3s-remote-readonly-task-dispatch.md` + `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md` → `deploy/k3d/v56-cluster.yaml` + `deploy/k3d/v56-workers.yaml` + `deploy/k8s/v56/chat-host.yaml` + `e2e_k3d_tests/*` → `e2e_remote_task_*.py` + `e2e_remote_chat_*.py` OK（2026-03-28）
 - REQ-0056-009 → `docs/plan/v56-k3s-remote-readonly-task-dispatch.md` + `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md` → `tests.test_remote_worker_protocol` + `tests.test_remote_task_dispatch` + `tests.test_remote_session_meta` → parent/child session metadata 与父侧 `tool.result` 均带 `target_node` / `git_revision` / `worker_execution_id`（2026-03-28）
 - REQ-0056-010 → 上述两份计划 → 上述全部测试 → M1 / M2 unit/integration + k3d smoke 均已执行并通过（2026-03-28）
-- REQ-0056-011 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` → M3 in progress
-- REQ-0056-012 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_remote_chat_bridge` + `e2e_k3d_tests/e2e_remote_chat_*.py` → M3 in progress
-- REQ-0056-013 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_agent_config_mapping` + `tests.test_remote_http_transport` → M3 in progress
-- REQ-0056-014 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` + `tests.test_remote_http_transport` + `e2e_k3d_tests/e2e_remote_chat_*.py` → M3 in progress
+- REQ-0056-011 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` → `python -m unittest -q tests.test_openai_tool_schemas tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_http_transport tests.test_remote_chat_bridge tests.test_remote_git_sync_policy tests.test_remote_session_meta` + `ruff check openagentic_cli/config.py openagentic_sdk/options.py openagentic_sdk/tools/openai.py openagentic_sdk/runtime_core/query_loop_steps/tool_schemas.py openagentic_sdk/subagents/remote_http.py e2e_k3d_tests/_smoke_provider.py e2e_k3d_tests/e2e_remote_chat_basic.py e2e_k3d_tests/e2e_remote_chat_sync_after_session.py e2e_k3d_tests/e2e_remote_chat_fanout.py tests/test_openai_tool_schemas.py tests/test_agent_config_mapping.py tests/test_remote_http_transport.py tests/test_remote_chat_bridge.py --config ruff.toml` → OK（2026-03-28）
+- REQ-0056-012 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_remote_chat_bridge` + `e2e_k3d_tests/e2e_remote_chat_*.py` → 本地 bridge 测试 + `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_*.py\" -v"'` → OK（2026-03-28）
+- REQ-0056-013 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_agent_config_mapping` + `tests.test_remote_http_transport` → 默认并发 3 与第 4 个任务排队 contract 已验证（2026-03-28）
+- REQ-0056-014 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` + `tests.test_remote_http_transport` + `e2e_k3d_tests/e2e_remote_chat_*.py` → 具名 agent 提示注入、worker 并发上限与 chat smoke 路由均已验证（2026-03-28）
 
 ## ECN
 

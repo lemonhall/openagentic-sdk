@@ -6,6 +6,8 @@ from typing import Any, Mapping, TextIO
 
 
 def _tool_group(name: str) -> str:
+    if name == "Task":
+        return "Subagents"
     if name in ("Read", "Glob", "Grep", "WebFetch", "WebSearch", "SlashCommand", "Skill"):
         return "Explored"
     if name in ("Write", "Edit", "NotebookEdit", "TodoWrite"):
@@ -55,6 +57,11 @@ def _summarize_tool_use(name: str, tool_input: Mapping[str, Any] | None) -> str:
         if isinstance(n, str) and n:
             return f"Skill `{n}`"
         return "Skill"
+    if name == "Task":
+        agent = inp.get("agent")
+        if isinstance(agent, str) and agent:
+            return f"Delegate to `{agent}`"
+        return "Task"
     return name
 
 
@@ -116,6 +123,27 @@ def _summarize_tool_result(
         if isinstance(lr, int) and isinstance(tl, int):
             return [f"lines={lr}/{tl}", f"file={fp}"] if isinstance(fp, str) and fp else [f"lines={lr}/{tl}"]
         return ["ok"]
+
+    if name == "Task" and isinstance(output, dict):
+        dispatch_mode = output.get("dispatch_mode")
+        target_node = output.get("target_node")
+        worker_execution_id = output.get("worker_execution_id")
+        child_session_id = output.get("child_session_id")
+
+        lines: list[str] = []
+        if isinstance(dispatch_mode, str) and dispatch_mode:
+            lines.append(f"dispatch_mode={dispatch_mode}")
+        elif isinstance(child_session_id, str) and child_session_id:
+            lines.append("dispatch_mode=local")
+
+        if isinstance(target_node, str) and target_node:
+            lines.append(f"target_node={target_node}")
+        if isinstance(worker_execution_id, str) and worker_execution_id:
+            lines.append(f"worker_execution_id={worker_execution_id}")
+        if isinstance(child_session_id, str) and child_session_id:
+            lines.append(f"child_session_id={child_session_id}")
+
+        return lines or ["ok"]
 
     return ["ok"]
 

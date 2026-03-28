@@ -92,6 +92,52 @@ class TestCliTraceRenderer(unittest.TestCase):
         r.on_event(ToolResult(tool_use_id="t1", output=None, is_error=True, error_message="boom"))
         self.assertIn("ERROR: boom", out.getvalue())
 
+    def test_remote_task_result_renders_dispatch_metadata(self) -> None:
+        from openagentic_cli.trace import TraceRenderer
+
+        out = io.StringIO()
+        r = TraceRenderer(stream=out, color=False)
+        r.on_event(ToolUse(tool_use_id="t1", name="Task", input={"agent": "writer", "prompt": "write a short essay"}))
+        r.on_event(
+            ToolResult(
+                tool_use_id="t1",
+                output={
+                    "dispatch_mode": "k3s",
+                    "target_node": "k3d-v56-openagentic-agent-1",
+                    "worker_execution_id": "exec-123",
+                },
+                is_error=False,
+            )
+        )
+
+        s = out.getvalue()
+        self.assertIn("• Subagents", s)
+        self.assertIn("writer", s)
+        self.assertIn("dispatch_mode=k3s", s)
+        self.assertIn("target_node=k3d-v56-openagentic-agent-1", s)
+        self.assertIn("worker_execution_id=exec-123", s)
+
+    def test_local_task_result_is_marked_as_local(self) -> None:
+        from openagentic_cli.trace import TraceRenderer
+
+        out = io.StringIO()
+        r = TraceRenderer(stream=out, color=False)
+        r.on_event(ToolUse(tool_use_id="t1", name="Task", input={"agent": "writer", "prompt": "write a short essay"}))
+        r.on_event(
+            ToolResult(
+                tool_use_id="t1",
+                output={
+                    "child_session_id": "abc123",
+                    "final_text": "done",
+                },
+                is_error=False,
+            )
+        )
+
+        s = out.getvalue()
+        self.assertIn("dispatch_mode=local", s)
+        self.assertIn("child_session_id=abc123", s)
+
 
 if __name__ == "__main__":
     unittest.main()

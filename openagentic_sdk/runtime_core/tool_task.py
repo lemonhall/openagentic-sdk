@@ -142,7 +142,11 @@ class TaskToolMixin:
         child_options = OpenAgenticOptions(
             provider=definition.provider or options.provider,
             model=definition.model or options.model,
-            api_key=options.api_key,
+            api_key=(
+                definition.provider_spec.api_key
+                if getattr(definition.provider_spec, "api_key", None)
+                else options.api_key
+            ),
             cwd=options.cwd,
             max_steps=options.max_steps,
             timeout_s=options.timeout_s,

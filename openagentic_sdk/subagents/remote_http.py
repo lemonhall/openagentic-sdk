@@ -17,6 +17,7 @@ from ..options import (
     AgentWorkspaceDefinition,
     OpenAgenticOptions,
 )
+from ..remote_cluster_config import ResolvedRemoteProviderSpec, build_provider_from_spec
 from ..serialization import event_from_dict, event_to_dict
 from ..sessions.store import FileSessionStore
 from .remote_dispatch import resolve_git_head_only
@@ -113,6 +114,7 @@ class RemoteTaskHttpWorkerServer:
         node_name: str,
         host: str = "127.0.0.1",
         port: int = 0,
+        health_status: Mapping[str, Any] | None = None,
     ) -> None:
         self._base_options = replace(
             base_options,
@@ -125,11 +127,13 @@ class RemoteTaskHttpWorkerServer:
         self._node_name = node_name
         self._host = host
         self._port = port
+        self._health_status = dict(health_status or {})
 
     def make_server(self) -> ThreadingHTTPServer:
         worker = InProcessRemoteTaskWorker(base_options=self._base_options, session_store=self._session_store)
         repo_root = self._repo_root
         node_name = self._node_name
+        health_status = dict(self._health_status)
         execution_slots: threading.BoundedSemaphore | None = None
         execution_slot_limit: int | None = None
         execution_slots_lock = threading.Lock()
@@ -163,6 +167,7 @@ class RemoteTaskHttpWorkerServer:
                         "ok": True,
                         "node_name": node_name,
                         "git_revision": resolve_git_head_only(cwd=repo_root),
+                        **health_status,
                     },
                 )
 
@@ -287,6 +292,7 @@ def _definition_to_dict(definition: AgentDefinition) -> dict[str, Any]:
         "description": definition.description,
         "prompt": definition.prompt,
         "tools": list(definition.tools),
+        "provider_spec": _provider_spec_to_dict(definition.provider_spec),
         "model": definition.model,
         "executor": {
             "kind": definition.executor.kind,
@@ -312,11 +318,15 @@ def _definition_from_dict(raw: Any) -> AgentDefinition:
 
     tools_raw = obj.get("tools")
     tools = tuple(str(item) for item in tools_raw) if isinstance(tools_raw, (list, tuple)) else ()
+    provider_spec = _provider_spec_from_dict(obj.get("provider_spec"))
+    provider_obj = build_provider_from_spec(provider_spec) if provider_spec is not None else None
 
     return AgentDefinition(
         description=str(obj.get("description") or ""),
         prompt=str(obj.get("prompt") or ""),
         tools=tools,
+        provider=provider_obj,
+        provider_spec=provider_spec,
         model=(str(obj.get("model")) if isinstance(obj.get("model"), str) else None),
         executor=AgentExecutorDefinition(
             kind=str(executor_obj.get("kind") or "local"),
@@ -328,4 +338,48 @@ def _definition_from_dict(raw: Any) -> AgentDefinition:
             image=(str(worker_obj.get("image")) if isinstance(worker_obj.get("image"), str) else None),
             max_concurrent_tasks=int(worker_obj.get("max_concurrent_tasks") or 3),
         ),
+    )
+
+
+def _provider_spec_to_dict(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, ResolvedRemoteProviderSpec):
+        return {
+            "provider_name": raw.provider_name,
+            "kind": raw.kind,
+            "base_url": raw.base_url,
+            "api_key": raw.api_key,
+            "api_key_header": raw.api_key_header,
+        }
+    if isinstance(raw, Mapping):
+        provider_name = raw.get("provider_name")
+        kind = raw.get("kind")
+        base_url = raw.get("base_url")
+        api_key = raw.get("api_key")
+        api_key_header = raw.get("api_key_header") or "authorization"
+        if all(isinstance(item, str) and item for item in (provider_name, kind, base_url, api_key)):
+            return {
+                "provider_name": provider_name,
+                "kind": kind,
+                "base_url": base_url,
+                "api_key": api_key,
+                "api_key_header": api_key_header if isinstance(api_key_header, str) else "authorization",
+            }
+    return None
+
+
+def _provider_spec_from_dict(raw: Any) -> ResolvedRemoteProviderSpec | None:
+    obj = raw if isinstance(raw, Mapping) else {}
+    provider_name = obj.get("provider_name")
+    kind = obj.get("kind")
+    base_url = obj.get("base_url")
+    api_key = obj.get("api_key")
+    api_key_header = obj.get("api_key_header") or "authorization"
+    if not all(isinstance(item, str) and item for item in (provider_name, kind, base_url, api_key)):
+        return None
+    return ResolvedRemoteProviderSpec(
+        provider_name=provider_name,
+        kind=kind,
+        base_url=base_url,
+        api_key=api_key,
+        api_key_header=api_key_header if isinstance(api_key_header, str) and api_key_header else "authorization",
     )

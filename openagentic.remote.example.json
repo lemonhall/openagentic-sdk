@@ -1,0 +1,50 @@
+{
+  "providers": {
+    "rightcode": {
+      "kind": "openai_responses",
+      "base_url_env": "RIGHTCODE_BASE_URL",
+      "api_key_env": "RIGHTCODE_API_KEY",
+      "default_model": "gpt-5.2"
+    }
+  },
+  "host": {
+    "provider": "rightcode",
+    "model": "gpt-5.2"
+  },
+  "agents": {
+    "research": {
+      "description": "Research-oriented remote subagent pinned to agent-0.",
+      "prompt": "You are a remote research worker. Read, search, and synthesize. Never modify repository files.",
+      "tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+      "provider": "rightcode",
+      "model": "gpt-5.2",
+      "executor": {
+        "kind": "k3s",
+        "node_name": "k3d-v56-openagentic-agent-0"
+      },
+      "workspace": {
+        "mode": "readonly"
+      },
+      "worker": {
+        "max_concurrent_tasks": 3
+      }
+    },
+    "writer": {
+      "description": "Writing-oriented remote subagent pinned to agent-1.",
+      "prompt": "You are a remote writing worker. Produce structured drafts from provided material. Never modify repository files.",
+      "tools": ["Read", "Glob", "Grep"],
+      "provider": "rightcode",
+      "model": "gpt-5.2",
+      "executor": {
+        "kind": "k3s",
+        "node_name": "k3d-v56-openagentic-agent-1"
+      },
+      "workspace": {
+        "mode": "readonly"
+      },
+      "worker": {
+        "max_concurrent_tasks": 3
+      }
+    }
+  }
+}

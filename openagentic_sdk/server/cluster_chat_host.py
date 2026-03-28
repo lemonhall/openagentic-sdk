@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from ..options import OpenAgenticOptions
 from ..permissions.gate import PermissionGate
+from ..remote_cluster_config import UnavailableRemoteProvider, load_remote_cluster_bootstrap
 from ..serialization import event_to_dict
 from ..sessions.store import FileSessionStore
 from ..subagents.git_sync import CommittedGitSynchronizer, GitSyncResult
@@ -99,11 +100,13 @@ class ClusterChatHostServer:
     port: int = 0
     host_node_name: str | None = None
     git_synchronizer: CommittedGitSynchronizer | None = None
+    health_status: Mapping[str, Any] | None = None
 
     def make_server(self) -> ThreadingHTTPServer:
         options = self.base_options
         store = self.session_store
         host_node_name = self.host_node_name or ""
+        health_status = dict(self.health_status or {})
         hub = _EventHub()
         synchronizer = self.git_synchronizer or CommittedGitSynchronizer(authoritative_cwd=options.cwd)
         running_abort: dict[str, threading.Event] = {}
@@ -175,6 +178,7 @@ class ClusterChatHostServer:
                         payload["git_revision"] = revision
                     if host_node_name:
                         payload["host_node_name"] = host_node_name
+                    payload.update(health_status)
                     _write_json(self, 200, payload)
                     return
 
@@ -310,13 +314,45 @@ class StaticNodeHttpRemoteTaskDispatcher:
         return await dispatcher.dispatch(request)
 
 
+def build_cluster_chat_host_from_remote_config(
+    *,
+    repo_root: str,
+    session_root: str,
+    remote_config_path: str,
+    env: Mapping[str, str] | None = None,
+) -> tuple[OpenAgenticOptions, FileSessionStore, dict[str, Any]]:
+    bootstrap = load_remote_cluster_bootstrap(repo_root=repo_root, config_path=remote_config_path, env=env)
+    session_store = FileSessionStore(root_dir=Path(session_root))
+    provider = bootstrap.host_provider or UnavailableRemoteProvider()
+    health_status = {
+        "provider_ready": bootstrap.self_check.provider_ready,
+        "provider_profiles": list(bootstrap.provider_profiles),
+        "config_source": bootstrap.config_source,
+    }
+    if bootstrap.self_check.errors:
+        health_status["provider_errors"] = list(bootstrap.self_check.errors)
+    options = OpenAgenticOptions(
+        provider=provider,
+        model=bootstrap.host_model or "gpt-5.2",
+        api_key=bootstrap.host_provider_spec.api_key if bootstrap.host_provider_spec is not None else None,
+        cwd=repo_root,
+        project_dir=repo_root,
+        tools=default_tool_registry(),
+        permission_gate=PermissionGate(permission_mode="bypass"),
+        session_store=session_store,
+        agents=bootstrap.agents,
+    )
+    return options, session_store, health_status
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Cluster-hosted chat bridge server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--session-root", required=True)
-    parser.add_argument("--provider-factory", required=True)
+    parser.add_argument("--provider-factory", default="")
+    parser.add_argument("--remote-config", default="")
     parser.add_argument("--agents-factory", default="")
     parser.add_argument("--model", default="fake")
     parser.add_argument("--host-node-name", default="")
@@ -325,23 +361,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sync-mirror", action="append", default=[])
     args = parser.parse_args(argv)
 
-    provider = _load_factory(args.provider_factory)()
-    agents = _load_factory(args.agents_factory)() if args.agents_factory else {}
-    node_urls = _parse_node_urls(args.node_url)
     host_node_name = args.host_node_name or (os.environ.get(args.host_node_name_env, "") if args.host_node_name_env else "")
-    session_store = FileSessionStore(root_dir=Path(args.session_root))
+    node_urls = _parse_node_urls(args.node_url)
+    health_status: dict[str, Any] = {}
+
+    if args.remote_config:
+        options, session_store, health_status = build_cluster_chat_host_from_remote_config(
+            repo_root=args.repo_root,
+            session_root=args.session_root,
+            remote_config_path=args.remote_config,
+            env=os.environ,
+        )
+    else:
+        if not args.provider_factory:
+            raise SystemExit("cluster chat host requires --provider-factory or --remote-config")
+        provider = _load_factory(args.provider_factory)()
+        agents = _load_factory(args.agents_factory)() if args.agents_factory else {}
+        session_store = FileSessionStore(root_dir=Path(args.session_root))
+        options = OpenAgenticOptions(
+            provider=provider,
+            model=args.model,
+            cwd=args.repo_root,
+            project_dir=args.repo_root,
+            tools=default_tool_registry(),
+            permission_gate=PermissionGate(permission_mode="bypass"),
+            session_store=session_store,
+            agents=agents if isinstance(agents, Mapping) else {},
+        )
+
     dispatcher = StaticNodeHttpRemoteTaskDispatcher(node_urls=node_urls) if node_urls else None
-    options = OpenAgenticOptions(
-        provider=provider,
-        model=args.model,
-        cwd=args.repo_root,
-        project_dir=args.repo_root,
-        tools=default_tool_registry(),
-        permission_gate=PermissionGate(permission_mode="bypass"),
-        session_store=session_store,
-        agents=agents if isinstance(agents, Mapping) else {},
-        remote_task_dispatcher=dispatcher,
-    )
+    options = replace(options, remote_task_dispatcher=dispatcher)
     synchronizer = CommittedGitSynchronizer(
         authoritative_cwd=args.repo_root,
         mirror_cwds=tuple(args.sync_mirror),
@@ -353,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         host_node_name=host_node_name or None,
         git_synchronizer=synchronizer,
+        health_status=health_status,
     ).make_server()
     try:
         httpd.serve_forever()

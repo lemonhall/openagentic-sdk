@@ -37,6 +37,7 @@ class AgentDefinition:
     prompt: str
     tools: Sequence[str] = ()
     provider: Optional[Provider] = None
+    provider_spec: Any | None = None
     model: Optional[str] = None
     executor: AgentExecutorDefinition = field(default_factory=AgentExecutorDefinition)
     workspace: AgentWorkspaceDefinition = field(default_factory=AgentWorkspaceDefinition)

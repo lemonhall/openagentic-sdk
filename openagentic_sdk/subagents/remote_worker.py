@@ -34,7 +34,11 @@ class InProcessRemoteTaskWorker:
         child_options = OpenAgenticOptions(
             provider=request.definition.provider or self.base_options.provider,
             model=request.definition.model or self.base_options.model,
-            api_key=self.base_options.api_key,
+            api_key=(
+                request.definition.provider_spec.api_key
+                if getattr(request.definition.provider_spec, "api_key", None)
+                else self.base_options.api_key
+            ),
             cwd=request.cwd,
             max_steps=self.base_options.max_steps,
             timeout_s=self.base_options.timeout_s,

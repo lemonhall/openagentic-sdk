@@ -1,57 +1,152 @@
-# k3s Remote Chat 手工测试指南（v56 M3）
+# k3s Remote Chat 手工测试指南（v56 M4）
 
-这份 guide 记录 v56 M3 的手工测试方法，目标是验证：
+这份 guide 把 v56 当前两条测试路径分开写清楚：
 
-- 本地 `oa chat` 可以连到集群里的主会话 host；
-- 主会话可以感知两个具名 remote subagent：
-  - `research`
-  - `writer`
-- 用户既可以显式点名，也可以直接说自然语言，让主会话自己路由；
-- 默认编排是串行的：先研究，再写作；
-- 对原子研究任务，主会话可以 fan-out 并发派发；
-- 同一 remote worker 默认最多同时执行 3 个任务。
+- `smoke cluster`
+  - 继续使用 `_smoke_provider.py`
+  - 目标是低成本回归协议、路由语义、并发 contract
+- `real-model cluster`
+  - 使用 `openagentic.remote.json + .openagentic.remote.env`
+  - 目标是验证 host 和 remote subagent 都已经是“真 agent”，不再返回 smoke 固定文案
 
-## 1. 先明确当前 M3 是什么
+## 1. 先认清当前 M4 的边界
 
-当前 `deploy/k8s/v56/chat-host.yaml` 挂的仍然是 smoke host provider：
+当前仓库已经具备：
 
-- `e2e_k3d_tests._smoke_provider:create_host_provider`
+- 独立的 remote cluster 配置层：
+  - `openagentic.remote.json`
+  - `.openagentic.remote.env`
+- real-model 启动入口：
+  - `openagentic_sdk.server.cluster_chat_host --remote-config`
+  - `openagentic_sdk.subagents.remote_http_worker_server --remote-config`
+- real-model 部署模板：
+  - `deploy/k8s/v56/chat-host-real.template.yaml`
+  - `deploy/k3d/v56-workers-real.template.yaml`
+- real-model 渲染 / apply 脚本：
+  - `scripts/apply_v56_real_cluster.py`
+
+当前仍然保留的实验性限制：
+
+- 本地 k3d 三节点实验环境仍然复用 `e2e_k3d_tests/_harness.py` 的 authoritative mirror 模型；
+- 也就是说，在本机 spike 环境里，节点看到的仓库内容仍然绑定到某个已提交 `HEAD`；
+- 仅修改 `openagentic.remote.json` / `.openagentic.remote.env` 时，不必删整个 cluster；
+- 但如果你要让当前 local k3d 节点看到新的 SDK 代码提交，还是要刷新 mirror，最稳的方式仍然是重新跑一次 k3d bring-up。
+
+## 2. 需要哪些文件
+
+仓库里提供了两个示例文件：
+
+- `openagentic.remote.example.json`
+- `.openagentic.remote.env.example`
+
+你本地实际使用时，创建：
+
+- `openagentic.remote.json`
+- `.openagentic.remote.env`
+
+PowerShell 命令：
+
+```powershell
+Copy-Item openagentic.remote.example.json openagentic.remote.json
+Copy-Item .openagentic.remote.env.example .openagentic.remote.env
+```
+
+说明：
+
+- `openagentic.remote.json` 可以进入 Git，它只存结构化配置，不放密钥；
+- `.openagentic.remote.env` 只应存在于控制端机器，已经被 `.gitignore` 忽略；
+- pod 内不会挂载这个 `.env` 文件本身，只会收到展开后的环境变量。
+
+## 3. `openagentic.remote.json` 现在表达什么
+
+当前示例里预置了两个 remote subagent：
+
+- `research`
+  - 节点：`k3d-v56-openagentic-agent-0`
+  - 定位：研究型 remote subagent
+- `writer`
+  - 节点：`k3d-v56-openagentic-agent-1`
+  - 定位：写作型 remote subagent
 
 这意味着：
 
-- 它已经不再是 M2 那种只认 `CHAT_PING` / `TASK_A` / `TASK_B` 的固定触发桩；
-- 它现在会用确定性的自然语言规则，模拟 M3 的路由行为；
-- 它不是通用大模型，但已经足够验证“具名 agent + 自然语言路由 + 串行/并发编排”的框架语义。
+- 你可以显式点名 `research` / `writer`
+- 也可以直接说自然语言，让主会话自己判断是否需要派发
+- `research` 本质上就是“agent-0 上那个研究者”
 
-当前 cluster agents 是：
+## 4. 从零开始的完整 real-model 冷启动流程
 
-- `research`
-  - 角色：研究型 remote subagent
-  - 节点：`k3d-v56-openagentic-agent-0`
-  - 约束：只读
-- `writer`
-  - 角色：写作型 remote subagent
-  - 节点：`k3d-v56-openagentic-agent-1`
-  - 约束：只读
-
-## 2. bring-up 的推荐方式
-
-当前仓库还没有单独的 `oa cluster up` 命令。最稳的 bring-up 方式，还是直接跑 v56 的 k3d chat smoke：
+### Step 1. 先确认你要测的代码已经进入当前 `HEAD`
 
 ```powershell
-wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_*.py\" -v"'
+git status --short
+git rev-parse --short HEAD
 ```
 
-注意：
+要求：
 
-- k3d authoritative workspace 只看当前 `HEAD`
-- 你本地未提交的改动不会自动进集群
-- 想验证最新代码，先 `git commit`
+- 最好工作区干净；
+- 至少要保证 SDK 代码的变更已经提交；
+- 因为当前本地 k3d 实验环境仍然以 authoritative mirror 的提交态为准。
 
-## 3. 看集群是否就绪
+### Step 2. 准备 remote config 和 env
+
+填好这两个文件：
+
+- `openagentic.remote.json`
+- `.openagentic.remote.env`
+
+最小示例：
+
+```text
+RIGHTCODE_BASE_URL=...
+RIGHTCODE_API_KEY=...
+```
+
+### Step 3. 先把本地三节点 k3d 基础环境准备出来
+
+最稳的方式，仍然是先跑一次现有 smoke chat bring-up。  
+这一步的意义不是“我要测 smoke”，而是复用它已经成熟的：
+
+- k3d 三节点创建
+- authoritative mirror 准备
+- `/var/lib/openagentic/repo` 挂载
+- `python:3.12-slim` 等镜像预加载
+
+命令：
 
 ```powershell
-wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56 get pods -o wide"'
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_basic.py\" -v"'
+```
+
+### Step 4. 渲染并 apply real-model manifests
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.json --env-file .openagentic.remote.env --output-dir .openagentic-rendered --apply"'
+```
+
+这一步会做：
+
+- 读取 `openagentic.remote.json`
+- 读取 `.openagentic.remote.env`
+- 先做 remote provider 自检
+- 渲染：
+  - `.openagentic-rendered/v56-workers-real.yaml`
+  - `.openagentic-rendered/chat-host-real.yaml`
+- 再 `kubectl apply` 到 `openagentic-v56-real` namespace
+
+### Step 5. 等待 real-model pods ready
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s"'
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-1 --timeout=180s"'
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s"'
+```
+
+### Step 6. 看 real-model namespace 里的 pod 状态
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real get pods -o wide"'
 ```
 
 预期至少能看到：
@@ -60,184 +155,254 @@ wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56 get pods 
 - `oa-remote-worker-agent-0-*`
 - `oa-remote-worker-agent-1-*`
 
-并且都处于 `Running`
+而且都应该是 `Running`
 
-## 4. 建立本地到 cluster host 的端口转发
+### Step 7. 检查 `/health`
 
-新开一个 PowerShell 终端，保持它不要关闭：
-
-```powershell
-wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56 port-forward service/oa-cluster-chat-host 18766:8766"'
-```
-
-## 5. 本地进入交互式 chat
-
-再开一个终端：
+先给 host 做端口转发：
 
 ```powershell
-oa chat --remote-host http://127.0.0.1:18766
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real port-forward service/oa-cluster-chat-host 18776:8766"'
 ```
 
-## 6. 当前 M3 smoke 环境推荐怎么测
+另开一个终端：
 
-### 6.1 先测主会话是否正常说话
+```powershell
+curl.exe http://127.0.0.1:18776/health
+```
+
+你至少要看到这些字段：
+
+- `ok`
+- `provider_ready`
+- `provider_profiles`
+- `config_source`
+- `host_node_name`
+
+正确预期：
+
+- `provider_ready` 为 `true`
+
+如果想看 worker health，也可以：
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real port-forward service/oa-remote-worker-agent-0 18765:8765"'
+curl.exe http://127.0.0.1:18765/health
+```
+
+## 5. 进入 real-model 交互测试
+
+另开一个 PowerShell：
+
+```powershell
+oa chat --remote-host http://127.0.0.1:18776
+```
+
+### 5.1 先测主会话是不是“真 agent”
 
 输入：
 
 ```text
-你好啊
+你好
 ```
 
-预期：
+再输入：
 
-- 主会话返回自然语言问候；
-- 不应该再只返回 `CHAT_HOST_OK`
+```text
+今天是星期几？
+```
 
-### 6.2 测“默认串行编排”
+正确预期：
+
+- 主会话会正常闲聊；
+- 不应再只返回 smoke 的固定兜底文案；
+- 尤其不能再只回 `CHAT_HOST_OK`，也不能只回“我可以帮你研究资料、并行拆分研究方向”这种硬编码模板。
+
+### 5.2 测显式点名 research
 
 输入：
 
 ```text
-请先研究一下 v56 的 remote subagent 路由方案，再根据研究结果写一个简短摘要。
+请调用 research，只读研究一下 v56 的 remote subagent 路由设计，并返回结论。
 ```
 
-预期：
+正确预期：
 
-- 主会话先派发 `research`
-- 收到研究结果后，再派发 `writer`
-- 最终结果里会看到研究结果来自 `k3d-v56-openagentic-agent-0`
-- 写作结果来自 `k3d-v56-openagentic-agent-1`
+- 主会话会派发到 `research`
+- `research` 实际绑定的是 `agent-0`
+- 返回内容应是正常研究结果，而不是 smoke 固定句子
 
-这验证的是：
-
-- 主会话可以串行 orchestrate 多个 remote subagent；
-- “先研究，再写作”这类请求，不需要你手工写 `Task(...)`
-
-### 6.3 测“只研究，不写作”
+### 5.3 测显式点名 writer
 
 输入：
 
 ```text
-请帮我研究一下 v56 的 remote subagent 路由设计。
+请调用 writer，把下面这段材料整理成一个简短摘要：v56 先把主会话放到集群，再把只读 remote subagent 分发到不同节点。
 ```
 
-预期：
+正确预期：
 
-- 主会话只派发 `research`
-- 最终结果来自 `k3d-v56-openagentic-agent-0`
+- 主会话会派发到 `writer`
+- 返回内容应是正常摘要，不是固定模板
 
-### 6.4 测“只写作”
+### 5.4 测自然语言自动路由
 
 输入：
 
 ```text
-请把这段内容整理成一个简短摘要。
-```
-
-预期：
-
-- 主会话只派发 `writer`
-- 最终结果来自 `k3d-v56-openagentic-agent-1`
-
-### 6.5 测“fan-out 并发研究”
-
-输入：
-
-```text
-请并发研究四个方向，并把结果汇总给我。
-```
-
-预期：
-
-- 主会话一次性派发 4 个研究子任务；
-- 4 个任务都会路由到 `research`；
-- 主会话最后汇总成一个 `FANOUT_SUMMARY ...`
-
-说明：
-
-- 这里的“并发”只适用于可拆分的原子研究任务；
-- 当前 worker 默认 `max_concurrent_tasks=3`，所以第 4 个任务会等待，不会无限制并发。
-
-## 7. 如何用自然语言把任务派给 agent-0
-
-这一层要分两种语义。
-
-### 7.1 你想显式点名
-
-当前框架支持显式点名 agent 名字。M3 smoke 里的名字是：
-
-- `research`
-- `writer`
-
-如果你的目标就是 `agent-0` 上的研究者，推荐这样说：
-
-```text
-请调用 research，让它只读研究一下 v56 的 remote subagent 路由方案，并返回结论。
-```
-
-这背后的语义是：
-
-- `research` 这个名字已经绑定到 `k3d-v56-openagentic-agent-0`
-- 所以“点名 research”本质上就是“点名派发到 agent-0 上的研究型 remote subagent”
-
-### 7.2 你不想点名，只想自然说
-
-更多时候你可以直接说任务意图，例如：
-
-```text
-请研究一下 v56 的 remote subagent 路由方案。
+请研究一下 v56 的 remote subagent 路由设计。
 ```
 
 或者：
 
 ```text
-先研究，再给我整理一个摘要。
+请先研究 v56 的 remote subagent 路由设计，再整理成一个摘要。
 ```
 
-主会话会根据任务类型自动决定：
+正确预期：
 
-- 研究任务交给 `research`
-- 写作任务交给 `writer`
-- 如果判断不稳，它就自己做，而不是去烦用户确认
+- 不点名时，主会话会依据 agent description / prompt 自己判断；
+- 第一条更容易路由到 `research`；
+- 第二条通常应先路由 `research`，再路由 `writer`；
+- 如果模型自己判断不稳，主会话也可能自己完成，这属于当前真实模型语义的一部分。
 
-这就是当前 M3 约定的默认行为。
+## 6. 如何用自然语言把任务派给 agent-0
 
-## 8. 当前 smoke 与未来真实模型的关系
+现在推荐两种说法。
 
-当前 smoke 已经能验证这些框架语义：
+### 6.1 显式点名
 
-- 主会话可见具名 remote subagent
-- 用户可显式点名，也可不点名
-- 默认串行编排
-- 原子任务允许 fan-out 并发
-- worker 有默认并发上限
+因为 `agent-0` 上绑定的名字就是 `research`，所以直接说：
 
-但它仍然不是“真正的模型理解”。真正上线到模型 provider 后，决定路由的是：
+```text
+请调用 research，让它只读研究一下这个主题。
+```
 
-- `Task(agent="research", prompt="...")`
-- `Task(agent="writer", prompt="...")`
+这就是最稳定的“派给 agent-0”的自然语言方式。
 
-以及主模型是否根据 agent description / prompt 做出正确选择。
+### 6.2 不点名，只表达任务意图
 
-也就是说：
+```text
+请研究一下这个主题。
+```
 
-- smoke 负责验证协议与框架语义
-- 真模型环境负责验证实际的模型路由质量
+或者：
 
-## 9. 恢复远程会话
+```text
+先研究，再给我整理成摘要。
+```
 
-如果你已经拿到了 `session_id`，可以继续：
+此时主会话会自己决定：
+
+- 研究任务是否交给 `research`
+- 写作任务是否交给 `writer`
+- 如果不确定，就主会话自己做，不会来烦用户确认
+
+## 7. 如何确认这次对话真的发生了 remote 派发
+
+CLI 输出里会显示 `session_id`。拿到以后，可以看事件流：
 
 ```powershell
-oa resume --remote-host http://127.0.0.1:18766 <session_id>
+$session = "<替换成 session_id>"
+(Invoke-RestMethod "http://127.0.0.1:18776/session/$session/events").entries | Where-Object { $_.type -eq "tool.result" } | ConvertTo-Json -Depth 6
 ```
+
+你应该能在 `tool.result` 里看到类似字段：
+
+- `dispatch_mode`
+- `target_node`
+- `git_revision`
+- `worker_execution_id`
+
+如果是显式点名 `research`，正确预期是：
+
+- `dispatch_mode = "k3s"`
+- `target_node = "k3d-v56-openagentic-agent-0"`
+
+## 8. 什么时候必须重建 cluster，什么时候只要重启 real deployments
+
+### 只改了这些，一般不必删整个 cluster
+
+- `.openagentic.remote.env`
+- `openagentic.remote.json`
+- real-model manifests 本身
+
+做法：
+
+1. 重新跑一遍 `scripts/apply_v56_real_cluster.py --apply`
+2. 必要时 `rollout restart`
+
+命令：
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout restart deployment/oa-remote-worker-agent-0"'
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout restart deployment/oa-remote-worker-agent-1"'
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout restart deployment/oa-cluster-chat-host"'
+```
+
+### 当前本地 spike 里，改了 SDK 代码后，最稳的还是刷新 authoritative mirror
+
+如果：
+
+- 你改了 Python 代码
+- 提交 `HEAD` 变化了
+- 你怀疑节点里挂载的 `/var/lib/openagentic/repo` 还是旧 mirror
+
+那么当前本地 k3d 实验路径里，最稳妥的仍然是重新跑一次 Step 3。  
+这是 v56 当前本地 spike 的现实限制，不是未来生产化 git pull 模型的最终形态。
+
+## 9. 如果 real-model 还是像 smoke，一步一步这样排查
+
+### 9.1 先看 health
+
+```powershell
+curl.exe http://127.0.0.1:18776/health
+```
+
+先确认：
+
+- `provider_ready=true`
+
+### 9.2 看 host 日志
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real logs deployment/oa-cluster-chat-host --tail=200"'
+```
+
+### 9.3 看 worker 日志
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real logs deployment/oa-remote-worker-agent-0 --tail=200"'
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real logs deployment/oa-remote-worker-agent-1 --tail=200"'
+```
+
+### 9.4 确认你测的是当前提交态
+
+```powershell
+git rev-parse --short HEAD
+git status --short
+```
+
+### 9.5 重新渲染并 apply real manifests
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.json --env-file .openagentic.remote.env --output-dir .openagentic-rendered --apply"'
+```
+
+### 9.6 还不对，再刷新基础 k3d 环境
+
+重新执行 Step 3，然后再执行 Step 4 和 Step 5。
 
 ## 10. 当前相关文件
 
+- `openagentic.remote.example.json`
+- `.openagentic.remote.env.example`
+- `scripts/apply_v56_real_cluster.py`
+- `deploy/k8s/v56/chat-host-real.template.yaml`
+- `deploy/k3d/v56-workers-real.template.yaml`
 - `deploy/k8s/v56/chat-host.yaml`
-- `e2e_k3d_tests/_smoke_provider.py`
-- `e2e_k3d_tests/e2e_remote_chat_basic.py`
-- `e2e_k3d_tests/e2e_remote_chat_fanout.py`
-- `e2e_k3d_tests/e2e_remote_chat_sync_after_session.py`
-- `openagentic_sdk/tool_prompts/task.txt`
+- `deploy/k3d/v56-workers.yaml`
+- `openagentic_sdk/remote_cluster_config.py`
+- `openagentic_sdk/server/cluster_chat_host.py`
+- `openagentic_sdk/subagents/remote_http_worker_server.py`
 - `openagentic_sdk/subagents/remote_http.py`

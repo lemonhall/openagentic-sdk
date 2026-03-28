@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,6 +17,7 @@ from openagentic_sdk.options import (
 )
 from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.providers.base import ModelOutput
+from openagentic_sdk.remote_cluster_config import ResolvedRemoteProviderSpec
 from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.subagents.remote_types import RemoteTaskRequest
 from openagentic_sdk.tools.registry import ToolRegistry
@@ -56,6 +59,14 @@ class BlockingHttpWorkerChildProvider:
         with self._lock:
             self.active -= 1
         return ModelOutput(assistant_text="remote http ok", tool_calls=[], usage=None, raw=None)
+
+
+class FailingBaseProvider:
+    name = "failing-base-provider"
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = (model, messages, tools, api_key)
+        raise AssertionError("worker fell back to base_options.provider instead of request.provider_spec")
 
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
@@ -202,6 +213,87 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
         for child_events in results:
             self.assertEqual(getattr(child_events[-1], "final_text", None), "remote http ok")
 
+    async def test_http_remote_worker_uses_provider_spec_from_request_definition(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            provider_httpd = self._make_responses_stub_server(
+                assistant_text="provider spec ok",
+                expected_auth_header="Bearer rc-secret",
+            )
+            provider_thread = threading.Thread(target=provider_httpd.serve_forever, daemon=True)
+            provider_thread.start()
+            try:
+                provider_spec = ResolvedRemoteProviderSpec(
+                    provider_name="rightcode",
+                    kind="openai_responses",
+                    base_url=f"http://127.0.0.1:{provider_httpd.server_address[1]}",
+                    api_key="rc-secret",
+                )
+                definition = AgentDefinition(
+                    description="remote child",
+                    prompt="REMOTE_HTTP_DEF: follow instructions",
+                    tools=("Read",),
+                    provider_spec=provider_spec,
+                    model="gpt-5.2",
+                    executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                    workspace=AgentWorkspaceDefinition(mode="readonly"),
+                )
+                base_options = OpenAgenticOptions(
+                    provider=FailingBaseProvider(),
+                    model="fake",
+                    api_key="wrong-base-key",
+                    cwd=str(repo_root),
+                    project_dir=str(repo_root),
+                    tools=ToolRegistry([]),
+                    permission_gate=PermissionGate(permission_mode="bypass"),
+                    session_store=store,
+                    agents={"worker_remote": definition},
+                )
+                worker_server = RemoteTaskHttpWorkerServer(
+                    base_options=base_options,
+                    session_store=store,
+                    repo_root=str(repo_root),
+                    node_name="node-http",
+                    host="127.0.0.1",
+                    port=0,
+                )
+                httpd = worker_server.make_server()
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    dispatcher = HttpRemoteTaskDispatcher(base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
+                    request = RemoteTaskRequest(
+                        parent_session_id="c" * 32,
+                        parent_tool_use_id="call_task",
+                        agent_name="worker_remote",
+                        prompt="Do remote child work",
+                        definition=definition,
+                        cwd=str(repo_root),
+                        project_dir=str(repo_root),
+                        git_revision=git_revision,
+                    )
+
+                    handle = await dispatcher.dispatch(request)
+                    child_events = [event async for event in handle.events]
+                finally:
+                    httpd.shutdown()
+                    httpd.server_close()
+                    thread.join(timeout=5.0)
+            finally:
+                provider_httpd.shutdown()
+                provider_httpd.server_close()
+                provider_thread.join(timeout=5.0)
+
+        self.assertTrue(child_events)
+        self.assertEqual(getattr(child_events[-1], "final_text", None), "provider spec ok")
+
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
         subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True, text=True)
@@ -213,6 +305,63 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
     def _git_head(self, root: Path) -> str:
         proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True)
         return proc.stdout.strip()
+
+    def _make_responses_stub_server(
+        self,
+        *,
+        assistant_text: str,
+        expected_auth_header: str | None = None,
+    ) -> ThreadingHTTPServer:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                if self.path != "/responses":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if expected_auth_header is not None and self.headers.get("Authorization") != expected_auth_header:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                length = int(self.headers.get("Content-Length") or "0")
+                payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                if payload.get("stream") is True:
+                    chunks = [
+                        'data: {"type":"response.created","response":{"id":"resp_test"}}\n\n',
+                        f'data: {json.dumps({"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}, ensure_ascii=False)}\n\n',
+                        f'data: {json.dumps({"type": "response.output_text.delta", "item_id": "msg_1", "delta": assistant_text}, ensure_ascii=False)}\n\n',
+                        'data: {"type":"response.completed","response":{"id":"resp_test","usage":{"total_tokens":10}}}\n\n',
+                        "data: [DONE]\n\n",
+                    ]
+                    raw = "".join(chunks).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+
+                raw = json.dumps(
+                    {
+                        "id": "resp_test",
+                        "output": [
+                            {
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": assistant_text}],
+                            }
+                        ],
+                        "usage": {"total_tokens": 10},
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+                _ = (format, args)
+
+        return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 
 
 if __name__ == "__main__":

@@ -27,9 +27,12 @@ coverage.xml
 
 # Model-driven e2e runner reports
 .openagentic_e2e_reports/
+.openagentic-rendered/
+.openagentic-rendered-smoke/
 
 # Local secrets (do not commit)
 .env
+.openagentic.remote.env
 
 
 .pypirc

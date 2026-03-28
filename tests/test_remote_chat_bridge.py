@@ -6,6 +6,8 @@ import subprocess
 import threading
 import time
 import unittest
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -204,6 +206,145 @@ class _NaturalLanguageBridgeProvider:
 
 
 class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
+    async def test_cluster_chat_host_health_reports_provider_status_from_remote_config(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import (
+            ClusterChatHostServer,
+            build_cluster_chat_host_from_remote_config,
+        )
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+            options, store, health_status = build_cluster_chat_host_from_remote_config(
+                repo_root=str(root),
+                session_root=str(sandbox / "session_home"),
+                remote_config_path=str(root / "openagentic.remote.json"),
+                env={
+                    "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                    "RIGHTCODE_API_KEY": "rc-secret",
+                },
+            )
+            httpd = ClusterChatHostServer(
+                base_options=options,
+                session_store=store,
+                host_node_name="node-host",
+                health_status=health_status,
+            ).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/health", timeout=5.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["provider_ready"])
+        self.assertEqual(payload["provider_profiles"], ["rightcode"])
+        self.assertEqual(payload["config_source"], str(root / "openagentic.remote.json"))
+        self.assertEqual(payload["host_node_name"], "node-host")
+
+    async def test_remote_worker_health_reports_provider_status_from_remote_config(self) -> None:
+        from openagentic_sdk.subagents.remote_http import RemoteTaskHttpWorkerServer
+        from openagentic_sdk.subagents.remote_http_worker_server import build_remote_http_worker_from_remote_config
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+            options, store, health_status = build_remote_http_worker_from_remote_config(
+                repo_root=str(root),
+                session_root=str(sandbox / "session_home"),
+                remote_config_path=str(root / "openagentic.remote.json"),
+                env={
+                    "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                    "RIGHTCODE_API_KEY": "rc-secret",
+                },
+            )
+            httpd = RemoteTaskHttpWorkerServer(
+                base_options=options,
+                session_store=store,
+                repo_root=str(root),
+                node_name="node-worker",
+                host="127.0.0.1",
+                port=0,
+                health_status=health_status,
+            ).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/health", timeout=5.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["provider_ready"])
+        self.assertEqual(payload["provider_profiles"], ["rightcode"])
+        self.assertEqual(payload["config_source"], str(root / "openagentic.remote.json"))
+        self.assertEqual(payload["node_name"], "node-worker")
+
+    async def test_cluster_chat_host_from_remote_config_uses_real_provider_api_key(self) -> None:
+        from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
+        from openagentic_sdk.server.cluster_chat_host import (
+            ClusterChatHostServer,
+            build_cluster_chat_host_from_remote_config,
+        )
+
+        provider_httpd = self._make_responses_stub_server(
+            assistant_text="今天是星期六。",
+            expected_auth_header="Bearer rc-secret",
+        )
+        provider_thread = threading.Thread(target=provider_httpd.serve_forever, daemon=True)
+        provider_thread.start()
+        try:
+            with TemporaryDirectory() as td:
+                sandbox = Path(td)
+                root = sandbox / "repo"
+                root.mkdir()
+                self._init_git_repo(root)
+                self._write_remote_cluster_config(root)
+                self._commit_file(root, "openagentic.remote.json", "add remote config")
+                options, store, health_status = build_cluster_chat_host_from_remote_config(
+                    repo_root=str(root),
+                    session_root=str(sandbox / "session_home"),
+                    remote_config_path=str(root / "openagentic.remote.json"),
+                    env={
+                        "RIGHTCODE_BASE_URL": f"http://127.0.0.1:{provider_httpd.server_address[1]}",
+                        "RIGHTCODE_API_KEY": "rc-secret",
+                    },
+                )
+                httpd = ClusterChatHostServer(
+                    base_options=options,
+                    session_store=store,
+                    host_node_name="node-host",
+                    health_status=health_status,
+                ).make_server()
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    client = ClusterChatClient(base_url=f"http://127.0.0.1:{httpd.server_address[1]}", timeout_s=1.0)
+                    events = [event async for event in client.query(prompt="今天是星期几？")]
+                finally:
+                    httpd.shutdown()
+                    httpd.server_close()
+                    thread.join(timeout=5.0)
+        finally:
+            provider_httpd.shutdown()
+            provider_httpd.server_close()
+            provider_thread.join(timeout=5.0)
+
+        self.assertEqual(getattr(events[-1], "final_text", None), "今天是星期六。")
+
     async def test_cluster_chat_client_keeps_sse_open_while_host_is_temporarily_idle(self) -> None:
         from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
@@ -443,6 +584,97 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
         (root / "README.md").write_text("hello\n", encoding="utf-8")
         subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", "init"], cwd=root, check=True, capture_output=True, text=True)
+
+    def _write_remote_cluster_config(self, root: Path) -> None:
+        (root / "openagentic.remote.json").write_text(
+            json.dumps(
+                {
+                    "providers": {
+                        "rightcode": {
+                            "kind": "openai_responses",
+                            "base_url_env": "RIGHTCODE_BASE_URL",
+                            "api_key_env": "RIGHTCODE_API_KEY",
+                            "default_model": "gpt-5.2",
+                        }
+                    },
+                    "host": {"provider": "rightcode", "model": "gpt-5.2"},
+                    "agents": {
+                        "research": {
+                            "description": "research worker",
+                            "prompt": "You are a research worker.",
+                            "tools": ["Read", "WebSearch"],
+                            "provider": "rightcode",
+                            "model": "gpt-5.2-mini",
+                            "executor": {"kind": "k3s", "node_name": "node-worker"},
+                            "workspace": {"mode": "readonly"},
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def _commit_file(self, root: Path, relative_path: str, message: str) -> None:
+        subprocess.run(["git", "add", relative_path], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", message], cwd=root, check=True, capture_output=True, text=True)
+
+    def _make_responses_stub_server(
+        self,
+        *,
+        assistant_text: str,
+        expected_auth_header: str | None = None,
+    ) -> ThreadingHTTPServer:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                if self.path != "/responses":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if expected_auth_header is not None and self.headers.get("Authorization") != expected_auth_header:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                length = int(self.headers.get("Content-Length") or "0")
+                payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                if payload.get("stream") is True:
+                    chunks = [
+                        'data: {"type":"response.created","response":{"id":"resp_test"}}\n\n',
+                        f'data: {json.dumps({"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}, ensure_ascii=False)}\n\n',
+                        f'data: {json.dumps({"type": "response.output_text.delta", "item_id": "msg_1", "delta": assistant_text}, ensure_ascii=False)}\n\n',
+                        'data: {"type":"response.completed","response":{"id":"resp_test","usage":{"total_tokens":10}}}\n\n',
+                        "data: [DONE]\n\n",
+                    ]
+                    raw = "".join(chunks).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+
+                raw = json.dumps(
+                    {
+                        "id": "resp_test",
+                        "output": [
+                            {
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": assistant_text}],
+                            }
+                        ],
+                        "usage": {"total_tokens": 10},
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+                _ = (format, args)
+
+        return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 
     def _session_id_from(self, events: list[object]) -> str:
         for event in events:

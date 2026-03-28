@@ -114,6 +114,8 @@ class OpenAgenticOptions:
 
     agents: Mapping[str, AgentDefinition] = field(default_factory=dict)
     remote_task_dispatcher: Any | None = None
+    remote_chat_base_url: str | None = None
+    remote_chat_timeout_s: float = 10.0
 
     # MCP placeholders (not implemented yet)
     mcp_servers: Mapping[str, Any] | None = None

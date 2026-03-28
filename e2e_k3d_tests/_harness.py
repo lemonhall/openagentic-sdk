@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 CLUSTER_NAME = "v56-openagentic"
 NAMESPACE = "openagentic-v56"
 WORKER_PORT = 8765
+CHAT_HOST_PORT = 8766
 
 SERVER_NODE = f"k3d-{CLUSTER_NAME}-server-0"
 AGENT_A_NODE = f"k3d-{CLUSTER_NAME}-agent-0"
 AGENT_B_NODE = f"k3d-{CLUSTER_NAME}-agent-1"
 WORKER_A_DEPLOYMENT = "oa-remote-worker-agent-0"
 WORKER_B_DEPLOYMENT = "oa-remote-worker-agent-1"
+CHAT_HOST_DEPLOYMENT = "oa-cluster-chat-host"
+CHAT_HOST_SERVICE = "oa-cluster-chat-host"
 
 _READY = False
 
@@ -50,8 +56,10 @@ def ensure_cluster_ready() -> None:
     _preload_node_images()
     _run(["kubectl", "config", "use-context", f"k3d-{CLUSTER_NAME}"])
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k3d" / "v56-workers.yaml")])
+    _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v56" / "chat-host.yaml")])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=180s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_B_DEPLOYMENT}", "--timeout=180s"])
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{CHAT_HOST_DEPLOYMENT}", "--timeout=180s"])
     _READY = True
 
 
@@ -68,6 +76,30 @@ def current_git_head() -> str:
 
 def read_repo_text(rel_path: str) -> str:
     return (authoritative_repo_root() / rel_path).read_text(encoding="utf-8")
+
+
+@contextmanager
+def port_forward_chat_host():
+    local_port = _pick_free_local_port()
+    proc = subprocess.Popen(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
+            "port-forward",
+            f"service/{CHAT_HOST_SERVICE}",
+            f"{local_port}:{CHAT_HOST_PORT}",
+        ],
+        cwd=repo_root(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_for_port_forward(proc, local_port)
+        yield f"http://127.0.0.1:{local_port}"
+    finally:
+        _stop_port_forward(proc)
 
 
 def _cluster_exists() -> bool:
@@ -106,7 +138,7 @@ def _preload_node_images() -> None:
     _run(["docker", "image", "save", "--platform", "linux/amd64", "rancher/mirrored-pause:3.6", "-o", str(pause_tar)])
     _run(["docker", "image", "save", "--platform", "linux/amd64", "python:3.12-slim", "-o", str(python_tar)])
 
-    for node_name in (AGENT_A_NODE, AGENT_B_NODE):
+    for node_name in (SERVER_NODE, AGENT_A_NODE, AGENT_B_NODE):
         _import_image(
             node_name=node_name,
             tar_path=pause_tar,
@@ -160,3 +192,38 @@ def _cluster_head() -> str:
 
 def _cluster_head_path() -> Path:
     return Path(tempfile.gettempdir()) / "openagentic-v56-cluster-head.txt"
+
+
+def _pick_free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_port_forward(proc: subprocess.Popen[str], local_port: int) -> None:
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            output = ""
+            if proc.stdout is not None:
+                output = proc.stdout.read()
+            raise RuntimeError(f"kubectl port-forward exited early: {output}")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex(("127.0.0.1", local_port)) == 0:
+                return
+        time.sleep(0.1)
+    _stop_port_forward(proc)
+    raise RuntimeError("kubectl port-forward did not become ready in time")
+
+
+def _stop_port_forward(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
+    if proc.stdout is not None:
+        proc.stdout.close()

@@ -7,6 +7,7 @@ from ..options import OpenAgenticOptions
 from ..sessions.store import FileSessionStore
 from .readonly_policy import build_remote_allowed_tools
 from .remote_types import RemoteTaskDispatchHandle, RemoteTaskRequest
+from .session_meta import build_child_session_metadata
 
 
 @dataclass(slots=True)
@@ -18,15 +19,15 @@ class InProcessRemoteTaskWorker:
     async def dispatch(self, request: RemoteTaskRequest) -> RemoteTaskDispatchHandle:
         execution_id = request.worker_execution_id or uuid.uuid4().hex
         child_session_id = self.session_store.create_session(
-            metadata={
-                "parent_session_id": request.parent_session_id,
-                "parent_tool_use_id": request.parent_tool_use_id,
-                "agent_name": request.agent_name,
-                "dispatch_mode": request.definition.executor.kind,
-                "target_node": request.definition.executor.node_name,
-                "git_revision": request.git_revision,
-                "worker_execution_id": execution_id,
-            }
+            metadata=build_child_session_metadata(
+                parent_session_id=request.parent_session_id,
+                parent_tool_use_id=request.parent_tool_use_id,
+                agent_name=request.agent_name,
+                dispatch_mode=request.definition.executor.kind,
+                target_node=request.definition.executor.node_name,
+                git_revision=request.git_revision,
+                worker_execution_id=execution_id,
+            )
         )
         self.last_child_session_id = child_session_id
 

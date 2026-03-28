@@ -5,19 +5,41 @@ import os
 import sys
 from pathlib import Path
 
+from openagentic_sdk.options import OpenAgenticOptions
 from openagentic_sdk.paths import default_session_root
-from openagentic_sdk.sessions.store import FileSessionStore
+from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.server.http_server import serve_http
+from openagentic_sdk.sessions.store import FileSessionStore
 
-from .auth_cmd import cmd_auth_list, cmd_auth_remove, cmd_auth_set
 from .args import build_parser
+from .auth_cmd import cmd_auth_list, cmd_auth_remove, cmd_auth_set
 from .config import build_options
 from .logs_cmd import summarize_events
 from .mcp_cmd import cmd_mcp_auth, cmd_mcp_list, cmd_mcp_logout
-from .share_cmd import cmd_share, cmd_shared, cmd_unshare
 from .repl import run_chat
 from .run_cmd import run_once
+from .share_cmd import cmd_share, cmd_shared, cmd_unshare
 from .style import StyleConfig
+
+
+class _RemoteBridgeProvider:
+    name = "remote-chat-bridge"
+
+    async def complete(self, **kwargs):  # noqa: ANN003
+        _ = kwargs
+        raise AssertionError("remote chat bridge should not call the local provider")
+
+
+def build_remote_bridge_options(*, cwd: str, project_dir: str | None, resume: str | None, remote_host: str) -> OpenAgenticOptions:
+    return OpenAgenticOptions(
+        provider=_RemoteBridgeProvider(),
+        model="remote-chat-bridge",
+        cwd=cwd,
+        project_dir=project_dir,
+        permission_gate=PermissionGate(permission_mode="bypass"),
+        resume=resume,
+        remote_chat_base_url=remote_host,
+    )
 
 
 def default_permission_mode() -> str:
@@ -54,13 +76,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if ns.command in ("chat", "resume"):
         session_id = getattr(ns, "session_id", None)
-        opts = build_options(
-            cwd=cwd,
-            project_dir=project_dir,
-            permission_mode=permission_mode,
-            resume=session_id,
-            interactive=interactive,
-        )
+        remote_host = getattr(ns, "remote_host", None)
+        if isinstance(remote_host, str) and remote_host.strip():
+            opts = build_remote_bridge_options(
+                cwd=cwd,
+                project_dir=project_dir,
+                resume=session_id,
+                remote_host=remote_host.strip(),
+            )
+        else:
+            opts = build_options(
+                cwd=cwd,
+                project_dir=project_dir,
+                permission_mode=permission_mode,
+                resume=session_id,
+                interactive=interactive,
+            )
         return int(
             asyncio.run(
                 run_chat(

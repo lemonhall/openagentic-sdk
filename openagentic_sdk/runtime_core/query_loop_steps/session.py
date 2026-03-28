@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..common import _default_session_root
 from ...events import Result
 from ...options import OpenAgenticOptions
 from ...providers.base import ToolCall
 from ...sessions.rebuild import rebuild_messages, rebuild_responses_input
 from ...sessions.store import FileSessionStore
-
+from ...subagents.session_meta import build_authoritative_session_metadata
+from ..common import _default_session_root
 from .types import SessionBootstrap
 
 
@@ -64,15 +64,13 @@ def bootstrap_session(options: OpenAgenticOptions, store: FileSessionStore) -> S
                 )
             )
     else:
-        metadata: dict[str, Any] = {
-            "cwd": options.cwd,
-            "provider_name": getattr(options.provider, "name", "unknown"),
-            "model": options.model,
-        }
-        if options.setting_sources:
-            metadata["setting_sources"] = list(options.setting_sources)
-        if options.allowed_tools is not None:
-            metadata["allowed_tools"] = list(options.allowed_tools)
+        metadata: dict[str, Any] = build_authoritative_session_metadata(
+            cwd=options.cwd,
+            provider_name=getattr(options.provider, "name", "unknown"),
+            model=options.model,
+            setting_sources=options.setting_sources,
+            allowed_tools=options.allowed_tools,
+        )
         session_id = store.create_session(metadata=metadata)
         messages = []
 

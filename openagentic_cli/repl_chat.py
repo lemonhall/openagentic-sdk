@@ -14,6 +14,7 @@ from typing import Protocol, TextIO
 from openagentic_sdk.options import OpenAgenticOptions
 from openagentic_sdk.paths import default_session_root
 from openagentic_sdk.runtime import AgentRuntime
+from openagentic_sdk.server.cluster_chat_client import ClusterChatRuntime
 from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.skills.index import index_skills
 
@@ -100,6 +101,11 @@ async def run_chat_impl(
         store = FileSessionStore(root_dir=Path(str(root)).expanduser())
     opts = replace(options, session_store=store)
 
+    def _make_runtime(run_opts: OpenAgenticOptions):
+        if getattr(run_opts, "remote_chat_base_url", None):
+            return ClusterChatRuntime(run_opts)
+        return AgentRuntime(run_opts)
+
     def _prompt_yes_no(prompt: str) -> bool:
         stdout.write(prompt)
         stdout.flush()
@@ -177,7 +183,12 @@ async def run_chat_impl(
         from prompt_toolkit.key_binding import KeyBindings  # noqa: PLC0415
         from prompt_toolkit.output.defaults import create_output  # noqa: PLC0415
         from prompt_toolkit.patch_stdout import patch_stdout  # noqa: PLC0415
-        from .session_editor import SESSION_EDITOR_BUSY_REQUEST, SESSION_EDITOR_OPEN_REQUEST, run_session_editor  # noqa: PLC0415
+
+        from .session_editor import (  # noqa: PLC0415
+            SESSION_EDITOR_BUSY_REQUEST,
+            SESSION_EDITOR_OPEN_REQUEST,
+            run_session_editor,
+        )
 
         restore_processed: Callable[[], None] | None = None
         restore_sigint = None
@@ -480,7 +491,7 @@ async def run_chat_impl(
                         abort_event = asyncio.Event()
                         current_abort_event = abort_event
                         run_opts = replace(opts, resume=session_id, abort_event=abort_event)
-                        runtime = AgentRuntime(run_opts)
+                        runtime = _make_runtime(run_opts)
 
                         # Prefetch the next prompt so users can type ahead while output streams.
                         if prompt_task is None:
@@ -739,7 +750,7 @@ async def run_chat_impl(
                 abort_event = asyncio.Event()
                 current_abort_event = abort_event
                 run_opts = replace(opts, resume=session_id, abort_event=abort_event)
-                runtime = AgentRuntime(run_opts)
+                runtime = _make_runtime(run_opts)
                 async for ev in runtime.query(prompt_text):
                     if getattr(ev, "type", None) == "system.init":
                         sid = getattr(ev, "session_id", None)

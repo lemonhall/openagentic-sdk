@@ -68,6 +68,20 @@ spec:
             path: /var/lib/openagentic/repo
             type: Directory
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oa-remote-worker-agent-0
+  namespace: openagentic-v56
+spec:
+  selector:
+    app.kubernetes.io/name: oa-remote-worker
+    oa.openagentic/node-name: k3d-v56-openagentic-agent-0
+  ports:
+    - name: http
+      port: 8765
+      targetPort: 8765
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -132,3 +146,17 @@ spec:
           hostPath:
             path: /var/lib/openagentic/repo
             type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oa-remote-worker-agent-1
+  namespace: openagentic-v56
+spec:
+  selector:
+    app.kubernetes.io/name: oa-remote-worker
+    oa.openagentic/node-name: k3d-v56-openagentic-agent-1
+  ports:
+    - name: http
+      port: 8765
+      targetPort: 8765

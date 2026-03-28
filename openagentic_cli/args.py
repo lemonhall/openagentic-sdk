@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_chat = sub.add_parser("chat", help="Start a multi-turn chat REPL")
     p_chat.add_argument("--resume", dest="session_id", default=None, help="Resume an existing session id")
+    p_chat.add_argument("--remote-host", default=None, help="Remote cluster chat host base URL (e.g. http://127.0.0.1:8766)")
 
     p_run = sub.add_parser("run", help="Run a one-shot prompt")
     p_run.add_argument("prompt", help="Prompt text")
@@ -22,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_resume = sub.add_parser("resume", help="Resume an existing session")
     p_resume.add_argument("session_id", help="Session id to resume")
+    p_resume.add_argument("--remote-host", default=None, help="Remote cluster chat host base URL (e.g. http://127.0.0.1:8766)")
 
     p_logs = sub.add_parser("logs", help="Summarize session events")
     p_logs.add_argument("session_id", help="Session id to summarize")

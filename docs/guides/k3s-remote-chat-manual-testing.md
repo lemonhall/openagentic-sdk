@@ -39,6 +39,21 @@ curl.exe http://127.0.0.1:18776/health
 - `deployment_mode = "smoke"`
 - `deployment_mode = "real-model"`
 
+如果你只是想直接进入聊天，而不想手工开 `kubectl port-forward`，现在可以直接用正式命令：
+
+```powershell
+oa chat --k3d-smoke
+oa chat --k3d-real
+```
+
+这两个命令会自己：
+
+- 选择一个空闲本地端口
+- 启动对应 namespace 的 `port-forward`
+- 预检 `/health`
+- 进入 `oa chat`
+- 退出时自动清理 `port-forward`
+
 ## 1. 先认清当前 M4 的边界
 
 当前仓库已经具备：

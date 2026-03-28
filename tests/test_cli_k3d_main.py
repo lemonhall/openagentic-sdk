@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import io
+import unittest
+from unittest import mock
+
+
+class TestCliK3dMain(unittest.TestCase):
+    def test_chat_k3d_real_uses_managed_port_forward(self) -> None:
+        import openagentic_cli.__main__ as cli_main
+
+        captured: dict[str, object] = {}
+
+        class _FakeForward:
+            base_url = "http://127.0.0.1:28776"
+
+            def start(self):
+                return {"ok": True, "deployment_mode": "real-model"}
+
+            def close(self):
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                _ = (exc_type, exc, tb)
+                return False
+
+        async def fake_run_chat(options, *, color_config, debug, stdin, stdout):
+            captured["remote_chat_base_url"] = options.remote_chat_base_url
+            captured["stdin"] = stdin
+            captured["stdout"] = stdout
+            _ = (color_config, debug)
+            return 0
+
+        with (
+            mock.patch.object(cli_main.sys, "stdin", io.StringIO("/exit\n")),
+            mock.patch.object(cli_main.sys, "stdout", io.StringIO()),
+            mock.patch.object(cli_main, "ManagedK3dChatPortForward", return_value=_FakeForward()),
+            mock.patch.object(cli_main, "resolve_k3d_chat_target") as resolve_target,
+            mock.patch.object(cli_main, "run_chat", side_effect=fake_run_chat),
+        ):
+            rc = cli_main.main(["chat", "--k3d-real"])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["remote_chat_base_url"], "http://127.0.0.1:28776")
+        resolve_target.assert_called_once_with(mode="real")
+
+
+if __name__ == "__main__":
+    unittest.main()

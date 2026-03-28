@@ -13,3 +13,7 @@
 
 - `docs/guides/opencode-parity-v2/README.md`
 - `docs/guides/oa-chat-multiline-paste.md`
+
+## Cluster / Remote Agents
+
+- `docs/guides/k3s-remote-chat-manual-testing.md`

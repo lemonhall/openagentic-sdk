@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator
 from ..serialization import event_from_dict
 
 _STREAM_END = object()
+_MIN_STREAM_IDLE_TIMEOUT_S = 35.0
 
 
 def _request_json(url: str, *, method: str, payload: dict[str, Any] | None = None, timeout_s: float = 10.0) -> dict[str, Any]:
@@ -62,6 +63,7 @@ class _SseStream:
 
     def close(self) -> None:
         response = self._response
+        self._response = None
         if response is not None:
             try:
                 fp = getattr(response, "fp", None)
@@ -72,13 +74,28 @@ class _SseStream:
                         sock.shutdown(socket.SHUT_RDWR)
                     except Exception:
                         pass
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                if raw is not None:
+                    try:
+                        raw.close()
+                    except Exception:
+                        pass
+                if fp is not None:
+                    try:
+                        fp.close()
+                    except Exception:
+                        pass
             except Exception:
                 pass
+        self._thread.join(timeout=0.2)
+        if response is not None and not self._thread.is_alive():
             try:
                 response.close()
             except Exception:
                 pass
-        self._thread.join(timeout=1.0)
 
     def _run(self) -> None:
         try:
@@ -170,7 +187,14 @@ class ClusterChatClient:
                 raise RuntimeError("remote chat host did not return a session id")
             session_id = sid
 
-        stream = _SseStream(url=self.base_url.rstrip("/") + "/event", timeout_s=self.timeout_s)
+        # The SSE endpoint is long-lived and can legitimately stay quiet until the
+        # host emits the next session event or periodic heartbeat (currently 30s).
+        # Keep the control-plane timeout for POST/GET requests, but give the event
+        # stream a larger idle-read budget so slow first dispatches do not self-timeout.
+        stream = _SseStream(
+            url=self.base_url.rstrip("/") + "/event",
+            timeout_s=max(float(self.timeout_s), _MIN_STREAM_IDLE_TIMEOUT_S),
+        )
         abort_task: asyncio.Task[None] | None = None
         try:
             while True:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import threading
+import time
 import unittest
 from io import StringIO
 from pathlib import Path
@@ -62,6 +64,18 @@ class _BridgeOnlyProvider:
         raise AssertionError("local bridge provider should never be called in remote chat mode")
 
 
+class _SlowBridgeProvider:
+    name = "bridge-slow"
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = messages
+        _ = tools
+        _ = api_key
+        await asyncio.sleep(0.5)
+        return ModelOutput(assistant_text="slow host ok", tool_calls=[], usage=None, raw=None)
+
+
 class _RecordingRemoteDispatcher:
     def __init__(self) -> None:
         self.requests = []
@@ -92,6 +106,41 @@ class _RecordingRemoteDispatcher:
 
 
 class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
+    async def test_cluster_chat_client_keeps_sse_open_while_host_is_temporarily_idle(self) -> None:
+        from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            options = OpenAgenticOptions(
+                provider=_SlowBridgeProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = ClusterChatClient(base_url=f"http://127.0.0.1:{httpd.server_address[1]}", timeout_s=0.2)
+                started_at = time.perf_counter()
+                events = [e async for e in client.query(prompt="hello")]
+                elapsed_s = time.perf_counter() - started_at
+                self.assertEqual(getattr(events[-1], "type", None), "result")
+                self.assertEqual(getattr(events[-1], "final_text", None), "slow host ok")
+                self.assertLess(elapsed_s, 5.0)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
     async def test_cluster_chat_client_streams_events_and_preserves_resume(self) -> None:
         from openagentic_sdk.server.cluster_chat_client import ClusterChatClient
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer

@@ -72,6 +72,92 @@ class FailingBaseProvider:
 
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
+    async def test_http_remote_worker_dispatcher_surfaces_child_stream_failure_without_json_corruption(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
+
+        class FailingStreamRemoteTaskWorker:
+            def __init__(self, *, base_options, session_store) -> None:
+                _ = (base_options, session_store)
+
+            async def dispatch(self, request):
+                async def _events():
+                    yield AssistantMessage(
+                        text="remote child started",
+                        agent_name=request.agent_name,
+                        parent_tool_use_id=request.parent_tool_use_id,
+                    )
+                    raise ValueError("boom from child stream")
+
+                return request.make_handle(
+                    child_session_id="c" * 32,
+                    target_node=request.definition.executor.node_name or "",
+                    git_revision=request.git_revision,
+                    worker_execution_id="exec-failing-stream",
+                    events=_events(),
+                )
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            definition = AgentDefinition(
+                description="remote child",
+                prompt="REMOTE_HTTP_DEF: follow instructions",
+                tools=("Read",),
+                executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                workspace=AgentWorkspaceDefinition(mode="readonly"),
+            )
+            base_options = OpenAgenticOptions(
+                provider=HttpWorkerChildProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(repo_root),
+                project_dir=str(repo_root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={"worker_remote": definition},
+            )
+            with mock.patch("openagentic_sdk.subagents.remote_http.InProcessRemoteTaskWorker", FailingStreamRemoteTaskWorker):
+                worker_server = RemoteTaskHttpWorkerServer(
+                    base_options=base_options,
+                    session_store=store,
+                    repo_root=str(repo_root),
+                    node_name="node-http",
+                    host="127.0.0.1",
+                    port=0,
+                )
+                httpd = worker_server.make_server()
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    dispatcher = HttpRemoteTaskDispatcher(base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
+                    request = RemoteTaskRequest(
+                        parent_session_id="e" * 32,
+                        parent_tool_use_id="call_task",
+                        agent_name="worker_remote",
+                        prompt="Do remote child work",
+                        definition=definition,
+                        cwd=str(repo_root),
+                        project_dir=str(repo_root),
+                        git_revision=git_revision,
+                    )
+
+                    handle = await dispatcher.dispatch(request)
+                    with self.assertRaises(RuntimeError) as ctx:
+                        async for _event in handle.events:
+                            pass
+                finally:
+                    httpd.shutdown()
+                    httpd.server_close()
+                    thread.join(timeout=5.0)
+
+        self.assertIn("Remote task worker stream failed", str(ctx.exception))
+        self.assertIn("boom from child stream", str(ctx.exception))
+
     async def test_http_remote_worker_dispatcher_survives_idle_gaps_after_headers(self) -> None:
         from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
 

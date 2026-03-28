@@ -25,6 +25,7 @@ from .remote_types import RemoteTaskRequest
 from .remote_worker import InProcessRemoteTaskWorker
 
 _STREAM_END = object()
+_REMOTE_STREAM_ERROR_KEY = "__oa_remote_stream_error__"
 
 
 class HttpRemoteTaskDispatcher:
@@ -75,6 +76,9 @@ class HttpRemoteTaskDispatcher:
                     obj = json.loads(text)
                     if not isinstance(obj, dict):
                         raise RuntimeError("Remote task event stream yielded a non-object JSON line")
+                    remote_stream_error = _remote_stream_error_from_payload(obj)
+                    if remote_stream_error is not None:
+                        raise remote_stream_error
                     q.put(event_from_dict(obj))
             except Exception as e:  # noqa: BLE001
                 q.put(e)
@@ -181,6 +185,7 @@ class RemoteTaskHttpWorkerServer:
                 if body is None:
                     return
 
+                stream_started = False
                 try:
                     request = _request_from_dict(body)
                     local_revision = resolve_git_head_only(cwd=repo_root)
@@ -215,6 +220,7 @@ class RemoteTaskHttpWorkerServer:
                         self.send_header("X-OA-Git-Revision", handle.git_revision)
                         self.send_header("X-OA-Worker-Execution-ID", handle.worker_execution_id or "")
                         self.end_headers()
+                        stream_started = True
 
                         async def _stream() -> None:
                             async for event in handle.events:
@@ -226,6 +232,9 @@ class RemoteTaskHttpWorkerServer:
                     finally:
                         slots.release()
                 except Exception as e:  # noqa: BLE001
+                    if stream_started:
+                        _write_remote_stream_error(self, e)
+                        return
                     _write_json(self, 500, {"error": str(e)})
 
             def log_message(self, format: str, *args: object) -> None:  # noqa: A003
@@ -396,3 +405,29 @@ def _disable_response_read_timeout(response: Any) -> None:
             settimeout(None)
         except OSError:
             return
+
+
+def _write_remote_stream_error(handler: BaseHTTPRequestHandler, exc: Exception) -> None:
+    payload = {
+        _REMOTE_STREAM_ERROR_KEY: {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+    }
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+    try:
+        handler.wfile.write(raw)
+        handler.wfile.flush()
+    except OSError:
+        return
+
+
+def _remote_stream_error_from_payload(obj: Mapping[str, Any]) -> RuntimeError | None:
+    raw = obj.get(_REMOTE_STREAM_ERROR_KEY)
+    if not isinstance(raw, Mapping):
+        return None
+    error_type = raw.get("error_type")
+    error_message = raw.get("error_message")
+    type_text = error_type if isinstance(error_type, str) and error_type else "RemoteWorkerError"
+    message_text = error_message if isinstance(error_message, str) and error_message else "unknown remote stream failure"
+    return RuntimeError(f"Remote task worker stream failed ({type_text}): {message_text}")

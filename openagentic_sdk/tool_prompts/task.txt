@@ -21,6 +21,7 @@ Usage notes:
 3. Each agent invocation is stateless unless you provide a session_id. Your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
 4. The agent's outputs should generally be trusted
 5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent
+6. If a Task invocation returns an error, do not claim that the subagent has already succeeded or is still working in the background. Either retry explicitly or report the failure honestly.
 
 Example usage (NOTE: The agents below are fictional examples for illustration only - use the actual agents listed above):
 

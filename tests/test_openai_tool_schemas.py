@@ -76,6 +76,7 @@ class TestOpenAiToolSchemas(unittest.TestCase):
         self.assertIn("agent", desc)
         self.assertNotIn("subagent_type", desc)
         self.assertNotIn("host-side WebSearch/WebFetch", desc)
+        self.assertIn("If a Task invocation returns an error", desc)
 
 if __name__ == "__main__":
     unittest.main()

@@ -173,4 +173,14 @@
 - Date: 2026-03-28
 - Env: Windows 11 + PowerShell 7.x
 - Command + Result:
-  - 本轮仅完成 PRD / v56 计划立项，未进入实现与测试阶段
+  - `python -m unittest -q tests.test_remote_chat_bridge tests.test_remote_git_sync_policy tests.test_remote_session_meta` → OK
+  - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_http_transport tests.test_remote_chat_bridge tests.test_remote_git_sync_policy tests.test_remote_session_meta` → OK
+  - `ruff check openagentic_cli/__main__.py openagentic_cli/args.py openagentic_cli/repl_chat.py openagentic_sdk/options.py openagentic_sdk/runtime_core/query_loop_steps/session.py openagentic_sdk/subagents/remote_dispatch.py openagentic_sdk/subagents/remote_worker.py openagentic_sdk/subagents/session_meta.py openagentic_sdk/subagents/git_sync.py openagentic_sdk/server/__init__.py openagentic_sdk/server/cluster_chat_client.py openagentic_sdk/server/cluster_chat_host.py e2e_k3d_tests/_harness.py e2e_k3d_tests/_smoke_provider.py e2e_k3d_tests/e2e_remote_chat_basic.py e2e_k3d_tests/e2e_remote_chat_sync_after_session.py tests/test_remote_chat_bridge.py tests/test_remote_git_sync_policy.py tests/test_remote_session_meta.py --config ruff.toml` → OK
+  - `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_*.py\" -v"'` → OK
+
+## Review Notes
+
+- cluster-hosted 主会话以 `openagentic_sdk.server.cluster_chat_host` 形式部署到 `k3d-v56-openagentic-server-0`，不再是假装成本地额外进程。
+- 本地 CLI 通过 `oa chat --remote-host http://127.0.0.1:<port>` 进入远程 chat bridge；单测覆盖了 streaming、resume、Task 子事件回流与 host 不可达快失败。
+- 提交态同步由 `CommittedGitSynchronizer` 明确建模；本地有 `git` 时走真实 Git contract，无 `git` 的 cluster host 则使用启动时工作树基线 + 忽略 `__pycache__` 的 fallback，仅用于判断 dirty/clean，不伪装目录打包同步。
+- k3d chat host 对 worker 的访问改为使用 Kubernetes Service 注入的 `*_SERVICE_HOST` 环境变量拼接 URL，避免 pod 内 DNS 波动导致首次派发失败。

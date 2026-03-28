@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from e2e_k3d_tests._harness import AGENT_A_NODE, ensure_cluster_ready, port_forward_chat_host
@@ -19,7 +20,7 @@ class TestRemoteChatBasic(unittest.IsolatedAsyncioTestCase):
             first_session_id = self._session_id_from(first_events)
             self.assertTrue(any(getattr(event, "type", None) == "assistant.message" for event in first_events))
 
-            second_events = [event async for event in client.query(prompt="TASK_A", session_id=first_session_id)]
+            second_events = await self._query_task_with_retry(client=client, session_id=first_session_id, prompt="TASK_A")
             self.assertEqual(self._session_id_from(second_events), first_session_id)
 
             task_results = [
@@ -48,6 +49,20 @@ class TestRemoteChatBasic(unittest.IsolatedAsyncioTestCase):
                 if isinstance(session_id, str) and session_id:
                     return session_id
         raise AssertionError("system.init missing from remote chat events")
+
+    async def _query_task_with_retry(self, *, client: ClusterChatClient, session_id: str, prompt: str) -> list[object]:
+        for attempt in range(2):
+            events = [event async for event in client.query(prompt=prompt, session_id=session_id)]
+            task_results = [
+                event
+                for event in events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            ]
+            if task_results and isinstance(task_results[-1].output, dict):
+                return events
+            if attempt == 0:
+                await asyncio.sleep(1.0)
+        return events
 
 
 if __name__ == "__main__":

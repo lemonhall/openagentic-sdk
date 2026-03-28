@@ -59,6 +59,15 @@ def _print(stdout: TextIO, text: str) -> None:
     stdout.flush()
 
 
+def _invalidate_pending_prompt_prefetch(*, session: object, prompt_task: asyncio.Task[object] | None) -> None:
+    if prompt_task is None or prompt_task.done():
+        return
+    app = getattr(session, "app", None)
+    invalidate = getattr(app, "invalidate", None)
+    if callable(invalidate):
+        invalidate()
+
+
 _CWD_QUESTION_RE = re.compile(
     r"^\s*(?:当前目录(?:是|为)?|当前路径|pwd|where am i|current directory)\s*[?？]?\s*$",
     re.IGNORECASE,
@@ -602,6 +611,7 @@ async def run_chat_impl(
                         # Visual separation: keep one blank line between the end of the assistant/tool output
                         # and the user's next prompt line.
                         _print(stdout, "")
+                        _invalidate_pending_prompt_prefetch(session=session, prompt_task=prompt_task)
                         current_abort_event = None
                         if session_id:
                             opts = replace(opts, resume=session_id)

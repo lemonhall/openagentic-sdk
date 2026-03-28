@@ -15,7 +15,11 @@ from typing import Any, Mapping
 
 from ..options import OpenAgenticOptions
 from ..permissions.gate import PermissionGate
-from ..remote_cluster_config import UnavailableRemoteProvider, load_remote_cluster_bootstrap
+from ..remote_cluster_config import (
+    UnavailableRemoteProvider,
+    build_remote_cluster_routing_system_prompt,
+    load_remote_cluster_bootstrap,
+)
 from ..serialization import event_to_dict
 from ..sessions.store import FileSessionStore
 from ..subagents.git_sync import CommittedGitSynchronizer, GitSyncResult
@@ -342,6 +346,7 @@ def build_cluster_chat_host_from_remote_config(
         permission_gate=PermissionGate(permission_mode="bypass"),
         session_store=session_store,
         setting_sources=["project"],
+        system_prompt=build_remote_cluster_routing_system_prompt(bootstrap.agents),
         agents=bootstrap.agents,
     )
     return options, session_store, health_status

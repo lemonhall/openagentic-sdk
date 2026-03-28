@@ -59,6 +59,56 @@ class UnavailableRemoteProvider:
         raise RuntimeError("remote cluster provider is not ready")
 
 
+def build_remote_cluster_routing_system_prompt(agents: Mapping[str, AgentDefinition]) -> str | None:
+    rendered_agents: list[str] = []
+    research_agents: list[str] = []
+    writer_agents: list[str] = []
+
+    for agent_name, raw_definition in agents.items():
+        if not isinstance(agent_name, str) or not agent_name.strip():
+            continue
+        if not isinstance(raw_definition, AgentDefinition):
+            continue
+        name = agent_name.strip()
+        rendered_agents.append(_render_remote_agent_line(name=name, definition=raw_definition))
+        if _looks_like_research_agent(name=name, definition=raw_definition):
+            research_agents.append(name)
+        if _looks_like_writer_agent(name=name, definition=raw_definition):
+            writer_agents.append(name)
+
+    if not rendered_agents:
+        return None
+
+    lines = [
+        "Remote cluster routing mode is enabled.",
+        "The following configured remote agents are available in this cluster:",
+        *rendered_agents,
+        "",
+        "Routing policy:",
+        "- If the user explicitly names an agent, obey that choice when the agent exists.",
+        "- Do not ask the user whether to delegate; decide that yourself.",
+    ]
+    if research_agents:
+        lines.append(
+            "- Delegate open-ended research, latest/current events, ongoing situations, external fact gathering, "
+            f"or online investigation to {_format_agent_names(research_agents)} before doing host-side "
+            "WebSearch/WebFetch yourself."
+        )
+    if writer_agents:
+        lines.append(
+            "- Delegate drafting, summarization, rewriting, and turning existing material into prose to "
+            f"{_format_agent_names(writer_agents)} when that work can be completed independently."
+        )
+    lines.extend(
+        [
+            "- A serial route is valid: first delegate research, then delegate writing based on the research result.",
+            "- Only fan out in parallel when the tasks are independent and atomic.",
+            "- If you are not confident that delegation helps, do the work yourself.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_provider_from_spec(spec: ResolvedRemoteProviderSpec) -> Provider:
     if spec.kind == "openai_responses":
         return OpenAIResponsesProvider(
@@ -218,3 +268,76 @@ def _as_non_empty_string(value: Any) -> str | None:
         stripped = value.strip()
         return stripped or None
     return None
+
+
+def _render_remote_agent_line(*, name: str, definition: AgentDefinition) -> str:
+    tools = ", ".join(str(item) for item in definition.tools) if definition.tools else "(inherit/default)"
+    node_name = definition.executor.node_name or "(unspecified)"
+    return (
+        f'- `{name}`: {definition.description}; '
+        f"tools: {tools}; executor: {definition.executor.kind}; node: {node_name}"
+    )
+
+
+def _format_agent_names(names: list[str]) -> str:
+    unique_names = []
+    for name in names:
+        if name not in unique_names:
+            unique_names.append(name)
+    if not unique_names:
+        return "the matching remote agent"
+    return ", ".join(f"`{name}`" for name in unique_names)
+
+
+def _looks_like_research_agent(*, name: str, definition: AgentDefinition) -> bool:
+    tool_names = {str(item) for item in definition.tools}
+    if "WebSearch" in tool_names or "WebFetch" in tool_names:
+        return True
+    haystack = " ".join([name, definition.description, definition.prompt]).lower()
+    return any(
+        token in haystack
+        for token in (
+            "research",
+            "researcher",
+            "search",
+            "investigate",
+            "investigation",
+            "latest",
+            "current",
+            "status",
+            "研究",
+            "研究员",
+            "搜索",
+            "检索",
+            "调研",
+            "资料",
+            "情报",
+            "现状",
+            "最新",
+        )
+    )
+
+
+def _looks_like_writer_agent(*, name: str, definition: AgentDefinition) -> bool:
+    haystack = " ".join([name, definition.description, definition.prompt]).lower()
+    return any(
+        token in haystack
+        for token in (
+            "writer",
+            "writing",
+            "draft",
+            "summary",
+            "summarize",
+            "rewrite",
+            "article",
+            "essay",
+            "写作",
+            "撰写",
+            "摘要",
+            "总结",
+            "整理",
+            "改写",
+            "文章",
+            "小作文",
+        )
+    )

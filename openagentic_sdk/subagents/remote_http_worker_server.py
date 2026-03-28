@@ -7,7 +7,11 @@ from pathlib import Path
 
 from ..options import OpenAgenticOptions
 from ..permissions.gate import PermissionGate
-from ..remote_cluster_config import UnavailableRemoteProvider, load_remote_cluster_bootstrap
+from ..remote_cluster_config import (
+    UnavailableRemoteProvider,
+    build_remote_cluster_routing_system_prompt,
+    load_remote_cluster_bootstrap,
+)
 from ..sessions.store import FileSessionStore
 from ..tools.defaults import default_tool_registry
 from .remote_http import RemoteTaskHttpWorkerServer
@@ -39,6 +43,7 @@ def build_remote_http_worker_from_remote_config(
         permission_gate=PermissionGate(permission_mode="bypass"),
         session_store=session_store,
         setting_sources=["project"],
+        system_prompt=build_remote_cluster_routing_system_prompt(bootstrap.agents),
         agents=bootstrap.agents,
     )
     return options, session_store, health_status

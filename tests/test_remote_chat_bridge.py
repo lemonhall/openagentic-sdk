@@ -267,6 +267,61 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
         self.assertIn("project", set(options.setting_sources))
         self.assertIn("remote-worker-project-rules", text)
 
+    async def test_cluster_chat_host_from_remote_config_includes_remote_only_routing_prompt(self) -> None:
+        from openagentic_sdk.prompt_system import build_system_prompt_text
+        from openagentic_sdk.server.cluster_chat_host import build_cluster_chat_host_from_remote_config
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+
+            options, _store, _health_status = build_cluster_chat_host_from_remote_config(
+                repo_root=str(root),
+                session_root=str(sandbox / "session_home"),
+                remote_config_path=str(root / "openagentic.remote.json"),
+                env={
+                    "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                    "RIGHTCODE_API_KEY": "rc-secret",
+                },
+            )
+            text = build_system_prompt_text(options) or ""
+
+        self.assertIn("remote cluster routing mode", text.lower())
+        self.assertIn("delegate open-ended research", text.lower())
+        self.assertIn("`research`", text)
+        self.assertIn("`writer`", text)
+        self.assertIn("If you are not confident that delegation helps, do the work yourself.", text)
+
+    async def test_remote_worker_from_remote_config_includes_remote_only_routing_prompt(self) -> None:
+        from openagentic_sdk.prompt_system import build_system_prompt_text
+        from openagentic_sdk.subagents.remote_http_worker_server import build_remote_http_worker_from_remote_config
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+
+            options, _store, _health_status = build_remote_http_worker_from_remote_config(
+                repo_root=str(root),
+                session_root=str(sandbox / "session_home"),
+                remote_config_path=str(root / "openagentic.remote.json"),
+                env={
+                    "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                    "RIGHTCODE_API_KEY": "rc-secret",
+                },
+            )
+            text = build_system_prompt_text(options) or ""
+
+        self.assertIn("remote cluster routing mode", text.lower())
+        self.assertIn("serial route is valid", text.lower())
+        self.assertIn("`research`", text)
+        self.assertIn("`writer`", text)
+
     async def test_cluster_chat_host_health_defaults_to_smoke_mode(self) -> None:
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
 
@@ -751,7 +806,16 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
                             "model": "gpt-5.2-mini",
                             "executor": {"kind": "k3s", "node_name": "node-worker"},
                             "workspace": {"mode": "readonly"},
-                        }
+                        },
+                        "writer": {
+                            "description": "writer worker",
+                            "prompt": "You are a writing worker.",
+                            "tools": ["Read", "Glob", "Grep"],
+                            "provider": "rightcode",
+                            "model": "gpt-5.2-mini",
+                            "executor": {"kind": "k3s", "node_name": "node-writer"},
+                            "workspace": {"mode": "readonly"},
+                        },
                     },
                 },
                 ensure_ascii=False,

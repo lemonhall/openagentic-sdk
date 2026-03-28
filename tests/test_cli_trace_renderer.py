@@ -1,7 +1,7 @@
 import io
 import unittest
 
-from openagentic_sdk.events import AssistantDelta, AssistantMessage, HookEvent, ToolResult, ToolUse
+from openagentic_sdk.events import AssistantDelta, AssistantMessage, HookEvent, Result, ToolResult, ToolUse
 
 
 class TestCliTraceRenderer(unittest.TestCase):
@@ -112,8 +112,8 @@ class TestCliTraceRenderer(unittest.TestCase):
 
         s = out.getvalue()
         self.assertIn("• Subagents", s)
-        self.assertIn("writer", s)
-        self.assertIn("dispatch_mode=k3s", s)
+        self.assertIn("[host] Delegate to `writer`", s)
+        self.assertIn("[host] dispatch_mode=k3s", s)
         self.assertIn("target_node=k3d-v56-openagentic-agent-1", s)
         self.assertIn("worker_execution_id=exec-123", s)
 
@@ -135,8 +135,40 @@ class TestCliTraceRenderer(unittest.TestCase):
         )
 
         s = out.getvalue()
-        self.assertIn("dispatch_mode=local", s)
+        self.assertIn("[host] dispatch_mode=local", s)
         self.assertIn("child_session_id=abc123", s)
+
+    def test_child_tool_trace_and_done_lines_include_agent_identity(self) -> None:
+        from openagentic_cli.trace import TraceRenderer
+
+        out = io.StringIO()
+        r = TraceRenderer(stream=out, color=False)
+        r.on_event(
+            ToolUse(
+                tool_use_id="t1",
+                name="WebSearch",
+                input={"query": "Iran March 2026"},
+                agent_name="research",
+                parent_tool_use_id="call_task",
+            )
+        )
+        r.on_event(
+            ToolResult(
+                tool_use_id="t1",
+                output={"query": "Iran March 2026", "results": [], "total_results": 0},
+                is_error=False,
+                agent_name="research",
+                parent_tool_use_id="call_task",
+            )
+        )
+        r.on_event(Result(final_text="", session_id="sid-child", stop_reason="no_output", agent_name="research"))
+        r.on_event(Result(final_text="", session_id="sid-parent", stop_reason="end"))
+
+        s = out.getvalue()
+        self.assertIn("[research] WebSearch `Iran March 2026`", s)
+        self.assertIn("[research] ok", s)
+        self.assertIn("• Done agent=research stop_reason=no_output session_id=sid-child", s)
+        self.assertIn("• Done agent=host stop_reason=end session_id=sid-parent", s)
 
 
 if __name__ == "__main__":

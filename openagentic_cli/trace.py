@@ -5,6 +5,17 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, TextIO
 
 
+def _event_actor(ev: Any) -> str:
+    agent = getattr(ev, "agent_name", None)
+    if isinstance(agent, str) and agent.strip():
+        return agent.strip()
+    return "host"
+
+
+def _label_with_actor(ev: Any, text: str) -> str:
+    return f"[{_event_actor(ev)}] {text}"
+
+
 def _tool_group(name: str) -> str:
     if name == "Task":
         return "Subagents"
@@ -221,7 +232,7 @@ class TraceRenderer:
             prefix = "  └ " if self._group_count == 0 else "    "
             self._group_count += 1
             summary = _summarize_tool_use(name, tool_input if isinstance(tool_input, dict) else None)
-            self.stream.write(prefix + summary + "\n")
+            self.stream.write(prefix + _label_with_actor(ev, summary) + "\n")
             self.stream.flush()
             return
 
@@ -243,14 +254,15 @@ class TraceRenderer:
             )
             for i, ln in enumerate(lines):
                 prefix = "    └ " if i == 0 else "      "
-                self.stream.write(prefix + ln + "\n")
+                line = _label_with_actor(ev, ln) if i == 0 else ln
+                self.stream.write(prefix + line + "\n")
             self.stream.flush()
             return
 
         if t == "result":
             stop_reason = getattr(ev, "stop_reason", None)
             session_id = getattr(ev, "session_id", None)
-            line = "• Done"
+            line = f"• Done agent={_event_actor(ev)}"
             if isinstance(stop_reason, str) and stop_reason:
                 line += f" stop_reason={stop_reason}"
             if isinstance(session_id, str) and session_id:

@@ -1,3 +1,4 @@
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -72,6 +73,64 @@ class RecordingRemoteDispatcher:
         )
 
 
+class NoOutputRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+
+        async def _events():
+            yield Result(
+                final_text="",
+                session_id="c" * 32,
+                stop_reason="no_output",
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+
+        return request.make_handle(
+            child_session_id="c" * 32,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id="exec-no-output",
+            events=_events(),
+        )
+
+
+class RemoteTaskNoOutputProvider:
+    name = "fake-no-output"
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = tools
+        _ = api_key
+        user_text = next((m.get("content") for m in messages if m.get("role") == "user"), "")
+
+        if isinstance(user_text, str) and user_text.startswith("PARENT_REMOTE_NO_OUTPUT:") and not any(m.get("role") == "tool" for m in messages):
+            return ModelOutput(
+                assistant_text=None,
+                tool_calls=[
+                    ToolCall(
+                        tool_use_id="call_task",
+                        name="Task",
+                        arguments={"agent": "worker_remote", "prompt": "Do remote child work"},
+                    )
+                ],
+                usage=None,
+                raw=None,
+            )
+
+        if any(m.get("role") == "tool" for m in messages):
+            tool_payload = next((m.get("content") for m in reversed(messages) if m.get("role") == "tool"), "")
+            tool_obj = json.loads(tool_payload) if isinstance(tool_payload, str) and tool_payload else {}
+            if isinstance(tool_obj, dict) and tool_obj.get("is_error") is True:
+                return ModelOutput(assistant_text="parent remote saw task failure", tool_calls=[], usage=None, raw=None)
+            return ModelOutput(assistant_text="parent remote unexpectedly saw success", tool_calls=[], usage=None, raw=None)
+
+        return ModelOutput(assistant_text="unexpected", tool_calls=[], usage=None, raw=None)
+
+
 class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
     async def test_k3s_agent_uses_remote_dispatcher_and_streams_child_events(self) -> None:
         with TemporaryDirectory() as td:
@@ -130,6 +189,52 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["final_text"], "remote child done")
         self.assertEqual(out["git_revision"], request.git_revision)
         self.assertEqual(out["worker_execution_id"], "exec-123")
+
+    async def test_k3s_agent_surfaces_child_no_output_as_error(self) -> None:
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = NoOutputRemoteDispatcher()
+
+            options = OpenAgenticOptions(
+                provider=RemoteTaskNoOutputProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for e in openagentic_sdk.query(prompt="PARENT_REMOTE_NO_OUTPUT: delegate", options=options):
+                events.append(e)
+
+        task_results = [e for e in events if getattr(e, "type", None) == "tool.result" and getattr(e, "tool_use_id", None) == "call_task"]
+        self.assertTrue(task_results)
+        task_result = task_results[-1]
+        self.assertTrue(task_result.is_error)
+        self.assertEqual(task_result.error_type, "SubagentNoOutput")
+        self.assertEqual(task_result.output["dispatch_mode"], "k3s")
+        self.assertEqual(task_result.output["target_node"], "node-a")
+        self.assertEqual(task_result.output["child_stop_reason"], "no_output")
+        self.assertEqual(getattr(events[-1], "final_text", None), "parent remote saw task failure")
 
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)

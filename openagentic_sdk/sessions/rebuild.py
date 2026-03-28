@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from ..compaction import COMPACTION_MARKER_QUESTION
 from ..events import (
     AssistantMessage,
     Event,
@@ -16,10 +17,18 @@ from ..events import (
     UserMessage,
 )
 
-from ..compaction import COMPACTION_MARKER_QUESTION
-
-
 _TOOL_OUTPUT_PLACEHOLDER = "[Old tool result content cleared]"
+
+
+def _tool_result_content(event: ToolResult) -> Any:
+    if not getattr(event, "is_error", False):
+        return event.output
+    return {
+        "is_error": True,
+        "error_type": getattr(event, "error_type", None),
+        "error_message": getattr(event, "error_message", None),
+        "output": event.output,
+    }
 
 
 def _filter_to_latest_summary_pivot(events: list[Event]) -> list[Event]:
@@ -127,7 +136,11 @@ def rebuild_messages(events: list[Event], *, max_events: int, max_bytes: int) ->
                 ],
             }
         elif isinstance(e, ToolResult):
-            content = _TOOL_OUTPUT_PLACEHOLDER if e.tool_use_id in compacted_ids else json.dumps(e.output, ensure_ascii=False)
+            content = (
+                _TOOL_OUTPUT_PLACEHOLDER
+                if e.tool_use_id in compacted_ids
+                else json.dumps(_tool_result_content(e), ensure_ascii=False)
+            )
             msg = {
                 "role": "tool",
                 "tool_call_id": e.tool_use_id,
@@ -195,7 +208,11 @@ def rebuild_responses_input(events: list[Event], *, max_events: int, max_bytes: 
                 "arguments": json.dumps(dict(e.input or {}), ensure_ascii=False),
             }
         elif isinstance(e, ToolResult):
-            output = _TOOL_OUTPUT_PLACEHOLDER if e.tool_use_id in compacted_ids else json.dumps(e.output, ensure_ascii=False)
+            output = (
+                _TOOL_OUTPUT_PLACEHOLDER
+                if e.tool_use_id in compacted_ids
+                else json.dumps(_tool_result_content(e), ensure_ascii=False)
+            )
             item = {
                 "type": "function_call_output",
                 "call_id": e.tool_use_id,

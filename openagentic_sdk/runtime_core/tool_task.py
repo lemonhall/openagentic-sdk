@@ -14,6 +14,60 @@ from ..subagents.remote_types import RemoteTaskRequest
 
 
 class TaskToolMixin:
+    def _task_child_result(
+        self,
+        *,
+        tool_use_id: str,
+        agent: str,
+        child_session_id: str,
+        child_final_text: str,
+        child_stop_reason: str | None,
+        dispatch_mode: str,
+        target_node: str | None = None,
+        git_revision: str | None = None,
+        worker_execution_id: str | None = None,
+    ) -> ToolResult:
+        payload: dict[str, Any] = {
+            "child_session_id": child_session_id,
+            "final_text": child_final_text,
+            "child_stop_reason": child_stop_reason,
+            "dispatch_mode": dispatch_mode,
+        }
+        if isinstance(target_node, str) and target_node:
+            payload["target_node"] = target_node
+        if isinstance(git_revision, str) and git_revision:
+            payload["git_revision"] = git_revision
+        if isinstance(worker_execution_id, str) and worker_execution_id:
+            payload["worker_execution_id"] = worker_execution_id
+
+        stop_reason = child_stop_reason or "missing_result"
+        final_text = child_final_text.strip()
+        if stop_reason != "end" or not final_text:
+            reason_suffix = f"stop_reason={stop_reason}"
+            if not final_text:
+                message = f"Subagent '{agent}' finished without output ({reason_suffix})"
+                error_type = "SubagentNoOutput"
+            else:
+                message = f"Subagent '{agent}' finished abnormally ({reason_suffix})"
+                error_type = "SubagentFailed"
+            return ToolResult(
+                tool_use_id=tool_use_id,
+                output=payload,
+                is_error=True,
+                error_type=error_type,
+                error_message=message,
+                parent_tool_use_id=self._parent_tool_use_id,
+                agent_name=self._agent_name,
+            )
+
+        return ToolResult(
+            tool_use_id=tool_use_id,
+            output=payload,
+            is_error=False,
+            parent_tool_use_id=self._parent_tool_use_id,
+            agent_name=self._agent_name,
+        )
+
     async def _handle_task_tool(
         self,
         *,
@@ -98,25 +152,24 @@ class TaskToolMixin:
                 )
                 handle = await dispatcher.dispatch(request)
                 child_final_text = ""
+                child_stop_reason: str | None = None
                 async for child_event in handle.events:
                     store.append_event(session_id, child_event)
                     yield child_event
                     if isinstance(child_event, Result):
                         child_final_text = child_event.final_text
+                        child_stop_reason = child_event.stop_reason
 
-                result = ToolResult(
+                result = self._task_child_result(
                     tool_use_id=tool_call.tool_use_id,
-                    output={
-                        "child_session_id": handle.child_session_id,
-                        "final_text": child_final_text,
-                        "dispatch_mode": "k3s",
-                        "target_node": handle.target_node,
-                        "git_revision": handle.git_revision,
-                        "worker_execution_id": handle.worker_execution_id,
-                    },
-                    is_error=False,
-                    parent_tool_use_id=self._parent_tool_use_id,
-                    agent_name=self._agent_name,
+                    agent=agent,
+                    child_session_id=handle.child_session_id,
+                    child_final_text=child_final_text,
+                    child_stop_reason=child_stop_reason,
+                    dispatch_mode="k3s",
+                    target_node=handle.target_node,
+                    git_revision=handle.git_revision,
+                    worker_execution_id=handle.worker_execution_id,
                 )
             except Exception as e:  # noqa: BLE001
                 result = ToolResult(
@@ -167,18 +220,21 @@ class TaskToolMixin:
         child_runtime = AgentRuntime(child_options, agent_name=agent, parent_tool_use_id=tool_call.tool_use_id)
         combined_prompt = definition.prompt + "\n\n" + task_prompt
         child_final_text = ""
+        child_stop_reason: str | None = None
         async for child_event in child_runtime.query(combined_prompt):
             store.append_event(session_id, child_event)
             yield child_event
             if isinstance(child_event, Result):
                 child_final_text = child_event.final_text
+                child_stop_reason = child_event.stop_reason
 
-        result = ToolResult(
+        result = self._task_child_result(
             tool_use_id=tool_call.tool_use_id,
-            output={"child_session_id": child_session_id, "final_text": child_final_text},
-            is_error=False,
-            parent_tool_use_id=self._parent_tool_use_id,
-            agent_name=self._agent_name,
+            agent=agent,
+            child_session_id=child_session_id,
+            child_final_text=child_final_text,
+            child_stop_reason=child_stop_reason,
+            dispatch_mode="local",
         )
         store.append_event(session_id, result)
         yield result

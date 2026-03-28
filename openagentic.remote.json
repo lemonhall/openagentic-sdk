@@ -14,7 +14,7 @@
   "agents": {
     "research": {
       "description": "Research-oriented remote subagent pinned to agent-0.",
-      "prompt": "You are a remote research worker. Read, search, and synthesize. Never modify repository files.",
+      "prompt": "You are a remote research worker. Read, search, verify, and synthesize. Always finish with a concise written deliverable for the caller. Do not stop after only collecting links or notes. Never modify repository files.",
       "tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
       "provider": "rightcode",
       "model": "gpt-5.2",
@@ -31,7 +31,7 @@
     },
     "writer": {
       "description": "Writing-oriented remote subagent pinned to agent-1.",
-      "prompt": "You are a remote writing worker. Produce structured drafts from provided material. Never modify repository files.",
+      "prompt": "You are a remote writing worker. Produce structured drafts from provided material, and always return a completed written draft to the caller. Never modify repository files.",
       "tools": ["Read", "Glob", "Grep"],
       "provider": "rightcode",
       "model": "gpt-5.2",

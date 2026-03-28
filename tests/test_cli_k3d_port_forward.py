@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import unittest
+from unittest import mock
 
 
 class _FakeProc:
@@ -28,6 +29,17 @@ class _FakeProc:
 
 
 class TestCliK3dPortForward(unittest.TestCase):
+    def test_default_spawn_detaches_stdin_from_console(self) -> None:
+        import subprocess
+
+        from openagentic_cli.k3d_chat import _default_spawn
+
+        with mock.patch("openagentic_cli.k3d_chat.subprocess.Popen") as popen:
+            _default_spawn(["wsl", "dummy"])
+
+        kwargs = popen.call_args.kwargs
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+
     def test_resolve_real_target_uses_real_namespace(self) -> None:
         from openagentic_cli.k3d_chat import resolve_k3d_chat_target
 

@@ -132,6 +132,7 @@ class ManagedK3dChatPortForward:
 def _default_spawn(argv: list[str]) -> subprocess.Popen[str]:
     return subprocess.Popen(
         argv,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

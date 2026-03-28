@@ -40,8 +40,8 @@ class TaskToolMixin:
         if isinstance(worker_execution_id, str) and worker_execution_id:
             payload["worker_execution_id"] = worker_execution_id
 
-        stop_reason = child_stop_reason or "missing_result"
         final_text = child_final_text.strip()
+        stop_reason = child_stop_reason or ("end" if final_text else "missing_result")
         if stop_reason != "end" or not final_text:
             reason_suffix = f"stop_reason={stop_reason}"
             if not final_text:

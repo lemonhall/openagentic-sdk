@@ -182,6 +182,7 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
 
         task_results = [e for e in events if getattr(e, "type", None) == "tool.result" and getattr(e, "tool_use_id", None) == "call_task"]
         self.assertTrue(task_results)
+        self.assertFalse(task_results[-1].is_error)
         out = task_results[-1].output
         self.assertEqual(out["dispatch_mode"], "k3s")
         self.assertEqual(out["target_node"], "node-a")

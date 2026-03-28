@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 
 def resolve_git_revision(*, cwd: str) -> str:
+    if shutil.which("git") is None:
+        return resolve_git_head_only(cwd=cwd)
+
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=cwd,

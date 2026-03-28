@@ -16,6 +16,8 @@ from .providers.base import Provider
 from .providers.openai_compatible import OpenAICompatibleProvider
 from .providers.openai_responses import OpenAIResponsesProvider
 
+_REMOTE_CLUSTER_PROVIDER_TIMEOUT_S = 180.0
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRemoteProviderSpec:
@@ -63,12 +65,14 @@ def build_provider_from_spec(spec: ResolvedRemoteProviderSpec) -> Provider:
             name=spec.provider_name,
             base_url=spec.base_url,
             api_key_header=spec.api_key_header,
+            timeout_s=_REMOTE_CLUSTER_PROVIDER_TIMEOUT_S,
         )
     if spec.kind == "openai_compatible":
         return OpenAICompatibleProvider(
             name=spec.provider_name,
             base_url=spec.base_url,
             api_key_header=spec.api_key_header,
+            timeout_s=_REMOTE_CLUSTER_PROVIDER_TIMEOUT_S,
         )
     raise ValueError(f"Unsupported remote provider kind: {spec.kind}")
 

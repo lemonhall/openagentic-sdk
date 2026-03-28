@@ -120,6 +120,7 @@ class TestRemoteClusterConfig(unittest.TestCase):
         self.assertEqual(type(provider).__name__, "OpenAIResponsesProvider")
         self.assertEqual(getattr(provider, "name", None), "rightcode")
         self.assertEqual(getattr(provider, "base_url", None), "https://rightcode.example.test/v1")
+        self.assertEqual(getattr(provider, "timeout_s", None), 180.0)
 
 
 if __name__ == "__main__":

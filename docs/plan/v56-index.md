@@ -17,7 +17,7 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard`
     - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_task_*.py" -v'`
-  - Status: todo
+  - Status: doing（2026-03-28；单元/集成已绿，k3d smoke 因本机缺少 docker/k3d/kubectl 未执行）
 
 - **M2: 集群主会话 host + 提交态同步**
   - Plan: `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md`
@@ -52,5 +52,6 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 ## Deltas (Vision vs Reality)
 
 - 当前仓库已有本地 `Task` / `AgentDefinition` 机制，但 CLI 配置层尚未把 `agent` 配置真正映射到 `OpenAgenticOptions.agents`。
-- 当前 subagent 运行方式仍是父 runtime 在本进程内直接构造 child runtime；远程派发、集群 host、提交态同步均尚未实现。
+- 当前 subagent 运行方式已经补到“本地 child runtime + 远程 dispatcher 抽象 + in-process remote worker”这一层，但真实 k3d/k3s smoke 仍未打通。
 - v56 在设计上明确把问题拆成两个里程碑，防止“远程 Task、远程 chat、Git 同步、K3s 实验环境”四件事同时开工导致失控。
+- 当前机器的 WSL2 环境缺少 `docker`、`kubectl`、`k3d`，所以 M1 的集群 smoke 暂时被环境阻塞。

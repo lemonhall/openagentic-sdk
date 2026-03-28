@@ -5,21 +5,28 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from openagentic_sdk.custom_tools import load_custom_tools
 from openagentic_sdk.hooks.engine import HookEngine
 from openagentic_sdk.hooks.models import HookDecision, HookMatcher
-from openagentic_sdk.opencode_config import load_merged_config
-from openagentic_sdk.options import CompactionOptions, OpenAgenticOptions
-from openagentic_sdk.plugins import load_plugins, merge_hook_engines, plugins_from_opencode_config
 from openagentic_sdk.js_plugins import load_js_plugin_tools, split_plugin_specs
-from openagentic_sdk.mcp.credentials import McpCredentialStore
+from openagentic_sdk.js_tools import load_js_tools
 from openagentic_sdk.mcp.auth_store import McpAuthStore
+from openagentic_sdk.mcp.credentials import McpCredentialStore
+from openagentic_sdk.opencode_config import load_merged_config
+from openagentic_sdk.options import (
+    AgentDefinition,
+    AgentExecutorDefinition,
+    AgentWorkerDefinition,
+    AgentWorkspaceDefinition,
+    CompactionOptions,
+    OpenAgenticOptions,
+)
 from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.permissions.interactive import InteractiveApprover
+from openagentic_sdk.plugins import load_plugins, merge_hook_engines, plugins_from_opencode_config
 from openagentic_sdk.providers.openai_responses import OpenAIResponsesProvider
 from openagentic_sdk.providers.selection import parse_model_ref, resolve_provider_and_model
 from openagentic_sdk.tools.defaults import default_tool_registry
-from openagentic_sdk.custom_tools import load_custom_tools
-from openagentic_sdk.js_tools import load_js_tools
 
 
 def require_env(name: str) -> str:
@@ -64,6 +71,92 @@ def build_provider_rightcode() -> OpenAIResponsesProvider:
         max_retries=_env_int("RIGHTCODE_MAX_RETRIES", 2),
         retry_backoff_s=_env_float("RIGHTCODE_RETRY_BACKOFF_S", 0.5),
     )
+
+
+def _expect_optional_string(value: Any, *, field_name: str, agent_name: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    raise SystemExit(f"Invalid agent '{agent_name}': {field_name} must be a string")
+
+
+def _expect_tool_list(value: Any, *, agent_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+        raise SystemExit(f"Invalid agent '{agent_name}': tools must be a list of non-empty strings")
+    return tuple(item.strip() for item in value)
+
+
+def _build_agents_from_config(cfg: Mapping[str, Any] | None) -> dict[str, AgentDefinition]:
+    if not isinstance(cfg, Mapping):
+        return {}
+
+    agent_cfg = cfg.get("agent")
+    if not isinstance(agent_cfg, Mapping):
+        return {}
+
+    out: dict[str, AgentDefinition] = {}
+    for name, raw_spec in agent_cfg.items():
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(raw_spec, Mapping):
+            raise SystemExit(f"Invalid agent '{name}': definition must be an object")
+        if raw_spec.get("mode") == "primary":
+            continue
+
+        prompt = _expect_optional_string(raw_spec.get("prompt"), field_name="prompt", agent_name=name)
+        if not prompt:
+            raise SystemExit(f"Invalid agent '{name}': prompt is required")
+
+        description = _expect_optional_string(raw_spec.get("description"), field_name="description", agent_name=name) or name
+        tools = _expect_tool_list(raw_spec.get("tools"), agent_name=name)
+        model = _expect_optional_string(raw_spec.get("model"), field_name="model", agent_name=name)
+
+        executor_raw = raw_spec.get("executor")
+        if executor_raw is not None and not isinstance(executor_raw, Mapping):
+            raise SystemExit(f"Invalid agent '{name}': executor must be an object")
+        executor_raw = executor_raw or {}
+        kind = _expect_optional_string(executor_raw.get("kind"), field_name="executor.kind", agent_name=name) or "local"
+        if kind not in {"local", "k3s"}:
+            raise SystemExit(f"Invalid agent '{name}': executor.kind must be 'local' or 'k3s'")
+        node_name = _expect_optional_string(executor_raw.get("node_name"), field_name="executor.node_name", agent_name=name)
+        if kind == "k3s" and not node_name:
+            raise SystemExit(f"Invalid agent '{name}': executor.node_name is required for k3s agents")
+
+        workspace_raw = raw_spec.get("workspace")
+        if workspace_raw is not None and not isinstance(workspace_raw, Mapping):
+            raise SystemExit(f"Invalid agent '{name}': workspace must be an object")
+        workspace_raw = workspace_raw or {}
+        workspace_mode = _expect_optional_string(workspace_raw.get("mode"), field_name="workspace.mode", agent_name=name)
+        if kind == "k3s":
+            workspace_mode = workspace_mode or "readonly"
+            if workspace_mode != "readonly":
+                raise SystemExit(f"Invalid agent '{name}': k3s agents must use workspace.mode='readonly'")
+        else:
+            workspace_mode = workspace_mode or "readwrite"
+
+        worker_raw = raw_spec.get("worker")
+        if worker_raw is not None and not isinstance(worker_raw, Mapping):
+            raise SystemExit(f"Invalid agent '{name}': worker must be an object")
+        worker_raw = worker_raw or {}
+        worker_profile = _expect_optional_string(worker_raw.get("profile"), field_name="worker.profile", agent_name=name)
+        worker_image = _expect_optional_string(worker_raw.get("image"), field_name="worker.image", agent_name=name)
+        if worker_image is None:
+            worker_image = _expect_optional_string(raw_spec.get("image"), field_name="image", agent_name=name)
+
+        out[name] = AgentDefinition(
+            description=description,
+            prompt=prompt,
+            tools=tools,
+            model=model,
+            executor=AgentExecutorDefinition(kind=kind, node_name=node_name),
+            workspace=AgentWorkspaceDefinition(mode=workspace_mode),
+            worker=AgentWorkerDefinition(profile=worker_profile, image=worker_image),
+        )
+    return out
 
 
 def build_options(
@@ -317,6 +410,8 @@ def build_options(
     if not api_key_val:
         api_key_val = require_env("RIGHTCODE_API_KEY")
 
+    agents = _build_agents_from_config(cfg if isinstance(cfg, dict) else None)
+
     return OpenAgenticOptions(
         provider=provider_obj,
         api_key=api_key_val,
@@ -334,4 +429,5 @@ def build_options(
         instruction_files=instruction_files,
         compaction=compaction,
         mcp_servers=mcp_servers,
+        agents=agents,
     )

@@ -14,12 +14,32 @@ from .tools.registry import ToolRegistry
 
 
 @dataclass(frozen=True, slots=True)
+class AgentExecutorDefinition:
+    kind: str = "local"
+    node_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AgentWorkspaceDefinition:
+    mode: str = "readwrite"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentWorkerDefinition:
+    profile: str | None = None
+    image: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AgentDefinition:
     description: str
     prompt: str
     tools: Sequence[str] = ()
     provider: Optional[Provider] = None
     model: Optional[str] = None
+    executor: AgentExecutorDefinition = field(default_factory=AgentExecutorDefinition)
+    workspace: AgentWorkspaceDefinition = field(default_factory=AgentWorkspaceDefinition)
+    worker: AgentWorkerDefinition = field(default_factory=AgentWorkerDefinition)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +113,7 @@ class OpenAgenticOptions:
     compaction: CompactionOptions = field(default_factory=CompactionOptions)
 
     agents: Mapping[str, AgentDefinition] = field(default_factory=dict)
+    remote_task_dispatcher: Any | None = None
 
     # MCP placeholders (not implemented yet)
     mcp_servers: Mapping[str, Any] | None = None

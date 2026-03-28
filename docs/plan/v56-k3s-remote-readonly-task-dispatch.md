@@ -202,4 +202,6 @@
 - Date: 2026-03-28
 - Env: Windows 11 + PowerShell 7.x
 - Command + Result:
-  - 本轮仅完成 PRD / v56 计划立项，未进入实现与测试阶段
+  - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_cli_config tests.test_subagent_task tests.test_session_parent_child_link tests.test_slash_command_parts_parity` → OK（12 tests）
+  - `ruff check openagentic_cli/config.py openagentic_sdk/options.py openagentic_sdk/runtime_core/tool_task.py openagentic_sdk/subagents tests/test_agent_config_mapping.py tests/test_remote_task_dispatch.py tests/test_remote_worker_protocol.py tests/test_remote_readonly_guard.py --config ruff.toml` → OK
+  - `wsl -e bash -lc 'which docker || true; which kubectl || true; which k3d || true'` → 三者均不存在；k3d smoke 未执行

@@ -56,6 +56,7 @@ class HttpRemoteTaskDispatcher:
         if not child_session_id or not target_node or not git_revision:
             response.close()
             raise RuntimeError("Remote task dispatch returned incomplete metadata headers")
+        _disable_response_read_timeout(response)
 
         q: queue.Queue[object] = queue.Queue()
 
@@ -383,3 +384,15 @@ def _provider_spec_from_dict(raw: Any) -> ResolvedRemoteProviderSpec | None:
         api_key=api_key,
         api_key_header=api_key_header if isinstance(api_key_header, str) and api_key_header else "authorization",
     )
+
+
+def _disable_response_read_timeout(response: Any) -> None:
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    settimeout = getattr(sock, "settimeout", None)
+    if callable(settimeout):
+        try:
+            settimeout(None)
+        except OSError:
+            return

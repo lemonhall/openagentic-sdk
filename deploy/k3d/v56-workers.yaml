@@ -29,6 +29,8 @@ spec:
           env:
             - name: PYTHONPATH
               value: /workspace/repo
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
             - name: OA_REMOTE_NODE_NAME
               valueFrom:
                 fieldRef:
@@ -108,6 +110,8 @@ spec:
           env:
             - name: PYTHONPATH
               value: /workspace/repo
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
             - name: OA_REMOTE_NODE_NAME
               valueFrom:
                 fieldRef:

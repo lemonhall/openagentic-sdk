@@ -128,12 +128,52 @@
   - 写类能力被拒绝
   - `tool.result` 带回正确节点与 revision 信息
 
+### REQ-0056-011 — 主会话必须能把“具名 remote subagent 清单”显式暴露给模型
+
+- v56 M3 必须允许在配置文件中声明多个短名字的 remote subagent，例如 `research`、`writer`。
+- 主会话在构造 `Task` 工具 schema / prompt 时，必须把这些 agent 的可见信息显式提供给模型，至少包括：
+  - agent 名字
+  - description
+  - tools
+  - `executor.kind`
+  - `executor.node_name`
+- 提示内容必须与当前 `Task` 工具的真实入参一致；不得继续使用过时字段名。
+
+### REQ-0056-012 — v56 M3 必须同时支持“显式点名”与“自然语言自动路由”
+
+- 用户在 prompt 里显式点名 agent 名字时，主会话应优先路由到对应的 remote subagent。
+- 用户不点名时，主模型必须可以依据 agent description / prompt 自行判断是否要调用某个 remote subagent。
+- 如果主模型对是否要派发没有把握，默认策略是“主会话自己处理”，而不是追问用户。
+- v56 M3 的默认编排语义是串行：例如先研究，再写作。
+- 只有当主会话自己判断任务可以拆成多个原子子任务时，才允许并发 fan-out 后再由主会话汇总。
+
+### REQ-0056-013 — 单个 remote worker 必须有显式的有界并发 contract
+
+- v56 M3 中，每个 remote worker 节点默认最多同时执行 `3` 个任务。
+- 超过上限时，不返回 `busy`；而是进入 worker 侧等待队列，直到有执行槽位释放。
+- 该并发上限必须是可配置的，并通过 agent config / worker config 真正进入 runtime。
+- 该 contract 仅针对单节点 worker；跨节点 group 调度与负载均衡不属于 M3 范围。
+
+### REQ-0056-014 — M3 测试必须覆盖“研究 -> 写作”的串行链和“原子 fan-out”的受控并发
+
+- 单元/集成至少覆盖：
+  - `Task` 工具提示里包含具名 agent 清单
+  - `Task` 提示与真实参数名一致
+  - worker 并发上限配置映射为默认 `3`
+  - 同一 worker 的第 `4` 个任务会等待，而不是无限放行
+- k3d smoke 至少覆盖：
+  - 本地 remote chat host 感知两个具名 remote subagent
+  - 用户自然语言要求“先研究后写作”时，主会话会先派 `research` 再派 `writer`
+  - 用户自然语言要求“从多个方向并发研究并汇总”时，主会话可并发派发多个研究子任务，再自行汇总
+  - 上述 fan-out 场景不突破单 worker 的并发上限 contract
+
 ## Acceptance (DoD)
 
 必须全部满足：
 
 1) 单元/集成：
    - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_git_sync_policy tests.test_remote_chat_bridge tests.test_remote_session_meta`
+   - `python -m unittest -q tests.test_openai_tool_schemas tests.test_remote_http_transport`
 2) WSL2/k3d 三节点 smoke：
    - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_task_*.py" -v'`
    - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_chat_*.py" -v'`

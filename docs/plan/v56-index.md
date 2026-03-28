@@ -27,10 +27,19 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
     - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_chat_*.py" -v'`
   - Status: done（2026-03-28；cluster chat bridge、dirty sync contract 与 k3d chat smoke 已绿）
 
+- **M3: 自然语言 remote subagent 路由 + worker 有界并发**
+  - Plan: `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md`
+  - PRD: `docs/prd/PRD-0056-k3s-distributed-readonly-subagents-v56.md`
+  - DoD（命令证据）：
+    - `python -m unittest -q tests.test_openai_tool_schemas tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_http_transport tests.test_remote_chat_bridge`
+    - `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_*.py\" -v"'`
+  - Status: in_progress（2026-03-28；文档已立项，待实现）
+
 ## Plan Index
 
 - `docs/plan/v56-k3s-remote-readonly-task-dispatch.md`
 - `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md`
+- `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md`
 
 ## Traceability Matrix (Req → Plan → Tests → Evidence)
 
@@ -44,6 +53,10 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - REQ-0056-008 → `docs/plan/v56-k3s-remote-readonly-task-dispatch.md` + `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md` → `deploy/k3d/v56-cluster.yaml` + `deploy/k3d/v56-workers.yaml` + `deploy/k8s/v56/chat-host.yaml` + `e2e_k3d_tests/*` → `e2e_remote_task_*.py` + `e2e_remote_chat_*.py` OK（2026-03-28）
 - REQ-0056-009 → `docs/plan/v56-k3s-remote-readonly-task-dispatch.md` + `docs/plan/v56-k3s-cluster-chat-and-committed-sync.md` → `tests.test_remote_worker_protocol` + `tests.test_remote_task_dispatch` + `tests.test_remote_session_meta` → parent/child session metadata 与父侧 `tool.result` 均带 `target_node` / `git_revision` / `worker_execution_id`（2026-03-28）
 - REQ-0056-010 → 上述两份计划 → 上述全部测试 → M1 / M2 unit/integration + k3d smoke 均已执行并通过（2026-03-28）
+- REQ-0056-011 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` → M3 in progress
+- REQ-0056-012 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_remote_chat_bridge` + `e2e_k3d_tests/e2e_remote_chat_*.py` → M3 in progress
+- REQ-0056-013 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_agent_config_mapping` + `tests.test_remote_http_transport` → M3 in progress
+- REQ-0056-014 → `docs/plan/v56-natural-language-remote-routing-and-bounded-worker-concurrency.md` → `tests.test_openai_tool_schemas` + `tests.test_remote_http_transport` + `e2e_k3d_tests/e2e_remote_chat_*.py` → M3 in progress
 
 ## ECN
 
@@ -57,3 +70,4 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - M2 已落地成“cluster-hosted chat host + 本地 CLI remote bridge + session-end committed sync + dirty-worktree 阻塞 + k3d 三节点 chat smoke”。
 - cluster host 在容器内不依赖系统 `git` 可执行文件：有 `git` 时走真实 Git contract，无 `git` 时使用启动时工作树基线判定 dirty，并显式忽略 `__pycache__` 这类运行时噪音。
 - cluster host 对 remote worker 的寻址改为依赖 Kubernetes Service 注入的 `*_SERVICE_HOST` 环境变量，而不是 pod 内 DNS，避免首次派发时的解析波动。
+- M3 目标是把“固定触发词 smoke”推进到“具名 remote subagent + 自然语言路由 + 单 worker 默认并发 3 的受控执行”。

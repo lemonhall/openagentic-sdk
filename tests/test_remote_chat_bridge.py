@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from openagentic_cli.repl import run_chat
 from openagentic_cli.style import StyleConfig
@@ -206,6 +207,66 @@ class _NaturalLanguageBridgeProvider:
 
 
 class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
+    async def test_cluster_chat_host_from_remote_config_inherits_project_prompt_sources(self) -> None:
+        from openagentic_sdk.prompt_system import build_system_prompt_text
+        from openagentic_sdk.server.cluster_chat_host import build_cluster_chat_host_from_remote_config
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+            (root / "AGENTS.md").write_text("remote-host-project-rules", encoding="utf-8")
+
+            env = {
+                "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                "RIGHTCODE_API_KEY": "rc-secret",
+                "XDG_CONFIG_HOME": str(sandbox / "xdg"),
+                "OPENCODE_TEST_HOME": str(sandbox / "home"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                options, _store, _health_status = build_cluster_chat_host_from_remote_config(
+                    repo_root=str(root),
+                    session_root=str(sandbox / "session_home"),
+                    remote_config_path=str(root / "openagentic.remote.json"),
+                    env=env,
+                )
+                text = build_system_prompt_text(options) or ""
+
+        self.assertIn("project", set(options.setting_sources))
+        self.assertIn("remote-host-project-rules", text)
+
+    async def test_remote_worker_from_remote_config_inherits_project_prompt_sources(self) -> None:
+        from openagentic_sdk.prompt_system import build_system_prompt_text
+        from openagentic_sdk.subagents.remote_http_worker_server import build_remote_http_worker_from_remote_config
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            self._write_remote_cluster_config(root)
+            (root / "AGENTS.md").write_text("remote-worker-project-rules", encoding="utf-8")
+
+            env = {
+                "RIGHTCODE_BASE_URL": "https://rightcode.example.test/v1",
+                "RIGHTCODE_API_KEY": "rc-secret",
+                "XDG_CONFIG_HOME": str(sandbox / "xdg"),
+                "OPENCODE_TEST_HOME": str(sandbox / "home"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                options, _store, _health_status = build_remote_http_worker_from_remote_config(
+                    repo_root=str(root),
+                    session_root=str(sandbox / "session_home"),
+                    remote_config_path=str(root / "openagentic.remote.json"),
+                    env=env,
+                )
+                text = build_system_prompt_text(options) or ""
+
+        self.assertIn("project", set(options.setting_sources))
+        self.assertIn("remote-worker-project-rules", text)
+
     async def test_cluster_chat_host_health_defaults_to_smoke_mode(self) -> None:
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
 

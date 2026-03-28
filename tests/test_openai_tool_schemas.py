@@ -75,6 +75,36 @@ class TestOpenAiToolSchemas(unittest.TestCase):
         self.assertIn("agent", desc)
         self.assertNotIn("subagent_type", desc)
 
+    def test_task_schema_includes_proactive_research_routing_hints(self) -> None:
+        schemas = tool_schemas_for_openai(
+            ["Task"],
+            context={
+                "agents": {
+                    "research": AgentDefinition(
+                        description="Research-oriented remote subagent pinned to agent-0.",
+                        prompt="RESEARCH_DEF",
+                        tools=("Read", "Glob", "Grep", "WebFetch", "WebSearch"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                    ),
+                    "writer": AgentDefinition(
+                        description="Writing-oriented remote subagent pinned to agent-1.",
+                        prompt="WRITER_DEF",
+                        tools=("Read", "Glob", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-b"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                    ),
+                }
+            },
+        )
+
+        desc = schemas[0]["function"]["description"]
+        self.assertIn("internet research", desc)
+        self.assertIn("latest/current events", desc)
+        self.assertIn("instead of using WebSearch/WebFetch directly from the host", desc)
+        self.assertIn("drafting, summarization, rewriting", desc)
+        self.assertIn("If you are not confident that delegation helps, do the work yourself", desc)
+
 
 if __name__ == "__main__":
     unittest.main()

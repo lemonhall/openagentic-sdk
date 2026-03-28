@@ -7,12 +7,15 @@ When using the Task tool, you must specify an agent parameter and it must match 
 
 When to use the Task tool:
 - When you are instructed to execute custom slash commands. Use the Task tool with the slash command invocation as the entire prompt. The slash command can take arguments. For example: Task(agent="research", prompt="/check-file path/to/file.py")
+- When the user's request is primarily internet research, latest/current events, current status, investigation, or external fact gathering, and one of the configured agents is clearly specialized for research, prefer delegating to that agent instead of using WebSearch/WebFetch directly from the host.
+- When the user's request is primarily drafting, summarization, rewriting, or turning prior research into prose, and one of the configured agents is clearly specialized for writing, prefer delegating to that agent.
 
 When NOT to use the Task tool:
 - If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use the Glob tool instead, to find the match more quickly
 - If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly
 - Other tasks that are not related to the agent descriptions above
+- If you are not confident that delegation helps, do the work yourself
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses

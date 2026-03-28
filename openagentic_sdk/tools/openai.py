@@ -21,10 +21,21 @@ def _render_task_agents(raw_agents: Any) -> str:
             continue
         tools = ", ".join(raw_definition.tools) if raw_definition.tools else "(inherit/default)"
         node_name = raw_definition.executor.node_name or "(none)"
+        tool_names = set(raw_definition.tools or ())
+        desc_lower = raw_definition.description.lower()
         blocks.append(f'- "{agent_name}": {raw_definition.description}')
         blocks.append(f"  tools: {tools}")
         blocks.append(f"  executor: {raw_definition.executor.kind}")
         blocks.append(f"  node_name: {node_name}")
+        if "WebSearch" in tool_names or "WebFetch" in tool_names:
+            blocks.append(
+                "  best_for: internet research, latest/current events, status checks, external fact gathering, synthesis"
+            )
+            blocks.append(
+                "  routing_hint: prefer delegating here instead of using WebSearch/WebFetch directly from the host"
+            )
+        if any(token in desc_lower for token in ("writer", "writing", "draft", "summary", "article")):
+            blocks.append("  best_for: drafting, summarization, rewriting from provided material or prior research")
     return "\n".join(blocks) if blocks else "  (none configured)"
 
 

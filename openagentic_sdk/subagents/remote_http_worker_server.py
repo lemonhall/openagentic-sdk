@@ -38,6 +38,7 @@ def build_remote_http_worker_from_remote_config(
         tools=default_tool_registry(),
         permission_gate=PermissionGate(permission_mode="bypass"),
         session_store=session_store,
+        setting_sources=["project"],
         agents=bootstrap.agents,
     )
     return options, session_store, health_status

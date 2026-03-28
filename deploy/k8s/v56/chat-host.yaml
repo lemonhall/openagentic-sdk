@@ -29,28 +29,19 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           command:
-            - python
-            - -u
-            - -m
-            - openagentic_sdk.server.cluster_chat_host
-            - --host
-            - 0.0.0.0
-            - --port
-            - "8766"
-            - --repo-root
-            - /workspace/repo
-            - --session-root
-            - /tmp/openagentic-cluster-chat
-            - --provider-factory
-            - e2e_k3d_tests._smoke_provider:create_host_provider
-            - --agents-factory
-            - e2e_k3d_tests._smoke_provider:create_cluster_agents
-            - --host-node-name-env
-            - OA_HOST_NODE_NAME
-            - --node-url
-            - k3d-v56-openagentic-agent-0=http://oa-remote-worker-agent-0.openagentic-v56.svc.cluster.local:8765
-            - --node-url
-            - k3d-v56-openagentic-agent-1=http://oa-remote-worker-agent-1.openagentic-v56.svc.cluster.local:8765
+            - sh
+            - -lc
+            - >
+              python -u -m openagentic_sdk.server.cluster_chat_host
+              --host 0.0.0.0
+              --port 8766
+              --repo-root /workspace/repo
+              --session-root /tmp/openagentic-cluster-chat
+              --provider-factory e2e_k3d_tests._smoke_provider:create_host_provider
+              --agents-factory e2e_k3d_tests._smoke_provider:create_cluster_agents
+              --host-node-name-env OA_HOST_NODE_NAME
+              --node-url k3d-v56-openagentic-agent-0=http://$OA_REMOTE_WORKER_AGENT_0_SERVICE_HOST:8765
+              --node-url k3d-v56-openagentic-agent-1=http://$OA_REMOTE_WORKER_AGENT_1_SERVICE_HOST:8765
           ports:
             - containerPort: 8766
           readinessProbe:

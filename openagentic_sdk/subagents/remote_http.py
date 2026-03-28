@@ -133,7 +133,7 @@ class RemoteTaskHttpWorkerServer:
         worker = InProcessRemoteTaskWorker(base_options=self._base_options, session_store=self._session_store)
         repo_root = self._repo_root
         node_name = self._node_name
-        health_status = dict(self._health_status)
+        health_status = {"deployment_mode": "smoke", **dict(self._health_status)}
         execution_slots: threading.BoundedSemaphore | None = None
         execution_slot_limit: int | None = None
         execution_slots_lock = threading.Lock()

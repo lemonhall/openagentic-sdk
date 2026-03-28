@@ -206,6 +206,39 @@ class _NaturalLanguageBridgeProvider:
 
 
 class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
+    async def test_cluster_chat_host_health_defaults_to_smoke_mode(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            options = OpenAgenticOptions(
+                provider=_BridgeProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/health", timeout=5.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deployment_mode"], "smoke")
+
     async def test_cluster_chat_host_health_reports_provider_status_from_remote_config(self) -> None:
         from openagentic_sdk.server.cluster_chat_host import (
             ClusterChatHostServer,
@@ -244,6 +277,7 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
                 thread.join(timeout=5.0)
 
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deployment_mode"], "real-model")
         self.assertTrue(payload["provider_ready"])
         self.assertEqual(payload["provider_profiles"], ["rightcode"])
         self.assertEqual(payload["config_source"], str(root / "openagentic.remote.json"))
@@ -288,6 +322,7 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
                 thread.join(timeout=5.0)
 
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deployment_mode"], "real-model")
         self.assertTrue(payload["provider_ready"])
         self.assertEqual(payload["provider_profiles"], ["rightcode"])
         self.assertEqual(payload["config_source"], str(root / "openagentic.remote.json"))
@@ -565,6 +600,54 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rc, 0)
                 self.assertIn("remote child says hi", rendered)
                 self.assertIn("host delegated", rendered)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
+    async def test_run_chat_warns_when_remote_host_is_smoke_only(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            host_options = OpenAgenticOptions(
+                provider=_BridgeProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+            )
+            httpd = ClusterChatHostServer(base_options=host_options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client_options = OpenAgenticOptions(
+                    provider=_BridgeOnlyProvider(),
+                    model="bridge",
+                    cwd=str(root),
+                    project_dir=str(root),
+                    permission_gate=PermissionGate(permission_mode="bypass"),
+                    remote_chat_base_url=f"http://127.0.0.1:{httpd.server_address[1]}",
+                    remote_chat_timeout_s=1.0,
+                )
+                stdin = StringIO("/exit\n")
+                stdout = StringIO()
+                rc = await run_chat(
+                    client_options,
+                    color_config=StyleConfig(color="never"),
+                    debug=False,
+                    stdin=stdin,
+                    stdout=stdout,
+                )
+                rendered = stdout.getvalue()
+                self.assertEqual(rc, 0)
+                self.assertIn("warning: remote host is smoke-only", rendered)
             finally:
                 httpd.shutdown()
                 httpd.server_close()

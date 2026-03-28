@@ -9,6 +9,36 @@
   - 使用 `openagentic.remote.json + .openagentic.remote.env`
   - 目标是验证 host 和 remote subagent 都已经是“真 agent”，不再返回 smoke 固定文案
 
+## 0. 先看端口，不要连错
+
+- `http://127.0.0.1:18766`
+  - 这是 `smoke cluster` 常用入口
+  - 预期会返回固定 smoke 文案，不是真实模型
+- `http://127.0.0.1:18776`
+  - 这是 `real-model cluster` 入口
+  - 预期会走真实 provider
+
+从当前版本开始，`oa chat --remote-host ...` 连接远程 host 时，会先读一次 `/health` 并打印一行模式提示：
+
+- 如果看到：
+  - `warning: remote host is smoke-only; ...`
+  - 说明你连到的是 smoke host
+- 如果看到：
+  - `remote: real-model host (...)`
+  - 说明你连到的是 real-model host
+
+最短诊断命令：
+
+```powershell
+curl.exe http://127.0.0.1:18766/health
+curl.exe http://127.0.0.1:18776/health
+```
+
+现在推荐直接看 `deployment_mode`：
+
+- `deployment_mode = "smoke"`
+- `deployment_mode = "real-model"`
+
 ## 1. 先认清当前 M4 的边界
 
 当前仓库已经具备：
@@ -174,6 +204,7 @@ curl.exe http://127.0.0.1:18776/health
 你至少要看到这些字段：
 
 - `ok`
+- `deployment_mode`
 - `provider_ready`
 - `provider_profiles`
 - `config_source`

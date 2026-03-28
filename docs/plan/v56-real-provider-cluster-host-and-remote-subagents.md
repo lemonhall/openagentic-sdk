@@ -51,7 +51,8 @@
 5. 手工/半自动 real-model 验收：
    - host 闲聊输入不再只返回 smoke 兜底文本
    - `research` / `writer` 返回内容来自真实模型调用，而非 `_smoke_provider.py`
-   - `/health` 显示 `provider_ready=true`
+   - `/health` 显示 `deployment_mode="real-model"` 且 `provider_ready=true`
+   - `oa chat --remote-host ...` 若误连 smoke host，会明确打印 smoke 警告，而不是继续让人误判
 6. 反作弊条款：
    - 不允许只是把 smoke provider 的固定分支换个文案
    - 不允许 worker 继续依赖本地 CLI provider 配置猜测逻辑
@@ -277,4 +278,4 @@ git commit -m "v56: wire real-provider cluster deployment"
 
 - Date: 2026-03-28
 - Env: Windows 11 + PowerShell 7.x
-- Status: automated verification green; pending real credentials / cluster manual acceptance
+- Status: automated verification green; real-model `/health` 与闲聊手工验证已通过；保留 smoke/real-model 显式区分

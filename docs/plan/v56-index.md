@@ -43,8 +43,8 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
     - `python -m unittest -q tests.test_openai_tool_schemas tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_http_transport tests.test_remote_chat_bridge tests.test_remote_git_sync_policy tests.test_remote_session_meta`
     - `python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.example.json --env-file .openagentic.remote.env.example --output-dir .openagentic-rendered-smoke`
     - `ruff check openagentic_sdk/options.py openagentic_sdk/remote_cluster_config.py openagentic_sdk/subagents/remote_http.py openagentic_sdk/subagents/remote_worker.py openagentic_sdk/server/cluster_chat_host.py openagentic_sdk/subagents/remote_http_worker_server.py openagentic_sdk/runtime_core/tool_task.py tests/test_remote_cluster_config.py tests/test_remote_http_transport.py tests/test_remote_chat_bridge.py scripts/apply_v56_real_cluster.py --config ruff.toml`
-    - 手工 / 半自动 real-model 验收：`/health` 显示 `provider_ready=true`，闲聊与 research/writer 不再返回 smoke 固定回复
-  - Status: in_progress（2026-03-28；自动化验证已绿，待真实凭据与 real-model 集群手工验收）
+    - 手工 / 半自动 real-model 验收：`/health` 显示 `deployment_mode="real-model"` 与 `provider_ready=true`，闲聊与 research/writer 不再返回 smoke 固定回复
+  - Status: done（2026-03-28；自动化验证、real-model `/health` 与真实闲聊已验证；CLI 会明确提示 smoke vs real-model）
 
 ## Plan Index
 
@@ -72,8 +72,8 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - REQ-0056-015 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `tests.test_remote_cluster_config` + `python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.example.json --env-file .openagentic.remote.env.example --output-dir .openagentic-rendered-smoke` → 远程集群配置层与本地 `oa chat` 配置链已分离；自动化 OK（2026-03-28）
 - REQ-0056-016 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `.gitignore` + `.openagentic.remote.env.example` + `python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.example.json --env-file .openagentic.remote.env.example --output-dir .openagentic-rendered-smoke` → 控制端 `.env` 注入模板已打通，pod 不挂载明文 env 文件；自动化 OK（2026-03-28）
 - REQ-0056-017 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `tests.test_remote_http_transport` + `tests.test_remote_chat_bridge` → host 下发 provider spec，worker 与 host 均使用真实 provider stub + 正确鉴权头；自动化 OK（2026-03-28）
-- REQ-0056-018 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `tests.test_remote_cluster_config` + `tests.test_remote_chat_bridge` → `/health` 暴露 `provider_ready` / `provider_profiles` / `config_source`；自动化 OK（2026-03-28）
-- REQ-0056-019 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `docs/guides/k3s-remote-chat-manual-testing.md` + real-model 手工验收 → smoke / real-model 两条路径已文档化；待真实凭据与集群手工验证（2026-03-28）
+- REQ-0056-018 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `tests.test_remote_cluster_config` + `tests.test_remote_chat_bridge` → `/health` 暴露 `deployment_mode` / `provider_ready` / `provider_profiles` / `config_source`；自动化 OK（2026-03-28）
+- REQ-0056-019 → `docs/plan/v56-real-provider-cluster-host-and-remote-subagents.md` → `docs/guides/k3s-remote-chat-manual-testing.md` + real-model 手工验收 → smoke / real-model 两条路径已文档化，CLI 误连 smoke 会报警；real-model `/health` + 闲聊已手工验证（2026-03-28）
 
 ## ECN
 
@@ -89,5 +89,5 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - cluster host 对 remote worker 的寻址改为依赖 Kubernetes Service 注入的 `*_SERVICE_HOST` 环境变量，而不是 pod 内 DNS，避免首次派发时的解析波动。
 - M3 目标是把“固定触发词 smoke”推进到“具名 remote subagent + 自然语言路由 + 单 worker 默认并发 3 的受控执行”。
 - M4 目标是把当前 smoke provider 驱动的 cluster host / workers 推进到“真实 provider 驱动的真 agent”，同时把远程集群配置层从本地 `oa chat` 配置中独立出来。
-- M4 自动化部分已经完成：host / worker 的真实 provider bootstrap、自检、provider spec 下发、env 注入模板渲染都已验证；剩余差异是需要用户提供真实供应商凭据后做一次 real-model 手工验收。
+- M4 已完成：host / worker 的真实 provider bootstrap、自检、provider spec 下发、env 注入模板渲染、real-model `/health` 与真实闲聊都已验证；同时补上了 smoke / real-model 显式模式标识与 CLI 启动预警，避免把 smoke host 误判成真 agent。
 - 本地 k3d 三节点环境额外暴露出一个基础设施问题：node 对 Docker Hub 的 443 出站不稳定时，`kube-system` 的 `coredns` / `metrics-server` / `local-path-provisioner` / `traefik` 相关镜像会卡在 `ImagePullBackOff`；v56 现已在 `e2e_k3d_tests/_harness.py` 里把这些系统镜像一起预加载，避免 fresh cluster 出现 pod DNS 全挂。

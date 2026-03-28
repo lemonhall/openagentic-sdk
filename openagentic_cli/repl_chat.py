@@ -14,7 +14,7 @@ from typing import Protocol, TextIO
 from openagentic_sdk.options import OpenAgenticOptions
 from openagentic_sdk.paths import default_session_root
 from openagentic_sdk.runtime import AgentRuntime
-from openagentic_sdk.server.cluster_chat_client import ClusterChatRuntime
+from openagentic_sdk.server.cluster_chat_client import ClusterChatClient, ClusterChatRuntime
 from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.skills.index import index_skills
 
@@ -65,6 +65,38 @@ _CWD_QUESTION_RE = re.compile(
 )
 
 
+async def _remote_host_banner(options: OpenAgenticOptions) -> str | None:
+    base_url = getattr(options, "remote_chat_base_url", None)
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None
+
+    timeout_s = getattr(options, "remote_chat_timeout_s", 10.0) or 10.0
+    client = ClusterChatClient(base_url=base_url.strip(), timeout_s=min(float(timeout_s), 2.5))
+    try:
+        health = await asyncio.to_thread(client.health)
+    except Exception as e:  # noqa: BLE001
+        return f"note: remote host health preflight failed: {e}"
+
+    deployment_mode = str(health.get("deployment_mode") or "").strip().lower()
+    if deployment_mode == "smoke":
+        return "warning: remote host is smoke-only; expect deterministic smoke replies, not a real model"
+    if deployment_mode == "real-model":
+        details: list[str] = []
+        provider_profiles = health.get("provider_profiles")
+        if isinstance(provider_profiles, list):
+            names = [item for item in provider_profiles if isinstance(item, str) and item]
+            if names:
+                details.append(f"profiles={','.join(names)}")
+        host_node_name = health.get("host_node_name")
+        if isinstance(host_node_name, str) and host_node_name:
+            details.append(f"node={host_node_name}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        return f"remote: real-model host{suffix}"
+    if "provider_ready" not in health and "config_source" not in health:
+        return "warning: remote host /health has no provider metadata; this usually means the smoke cluster"
+    return None
+
+
 async def run_chat_impl(
     options: OpenAgenticOptions,
     *,
@@ -100,6 +132,7 @@ async def run_chat_impl(
             root = default_session_root()
         store = FileSessionStore(root_dir=Path(str(root)).expanduser())
     opts = replace(options, session_store=store)
+    remote_banner = await _remote_host_banner(opts)
 
     def _make_runtime(run_opts: OpenAgenticOptions):
         if getattr(run_opts, "remote_chat_base_url", None):
@@ -224,6 +257,8 @@ async def run_chat_impl(
                     else TraceRenderer(stream=render_stream, color=False, show_hooks=debug)
                 )
 
+            if remote_banner:
+                _print(stdout, fg_red(remote_banner, enabled=enable_color) if remote_banner.startswith("warning:") else dim(remote_banner, enabled=enable_color))
             ptk_in = create_input(stdin, always_prefer_tty=True)
             ptk_out = create_output(sys.__stdout__ if stdout is sys.stdout else stdout, always_prefer_tty=True)
             session = PromptSession(input=ptk_in, output=ptk_out)
@@ -618,6 +653,8 @@ async def run_chat_impl(
 
     if backend == "legacy" and (stdin_is_tty and is_tty):
         _print(stdout, dim("note: legacy CLI input backend is deprecated (use OA_CLI_INPUT_BACKEND=prompt_toolkit)", enabled=enable_color))
+    if remote_banner:
+        _print(stdout, fg_red(remote_banner, enabled=enable_color) if remote_banner.startswith("warning:") else dim(remote_banner, enabled=enable_color))
     _print(stdout, dim("Type /help for commands.", enabled=enable_color))
     try:
         while True:

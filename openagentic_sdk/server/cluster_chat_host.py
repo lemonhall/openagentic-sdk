@@ -106,7 +106,7 @@ class ClusterChatHostServer:
         options = self.base_options
         store = self.session_store
         host_node_name = self.host_node_name or ""
-        health_status = dict(self.health_status or {})
+        health_status = {"deployment_mode": "smoke", **dict(self.health_status or {})}
         hub = _EventHub()
         synchronizer = self.git_synchronizer or CommittedGitSynchronizer(authoritative_cwd=options.cwd)
         running_abort: dict[str, threading.Event] = {}
@@ -325,6 +325,7 @@ def build_cluster_chat_host_from_remote_config(
     session_store = FileSessionStore(root_dir=Path(session_root))
     provider = bootstrap.host_provider or UnavailableRemoteProvider()
     health_status = {
+        "deployment_mode": "real-model",
         "provider_ready": bootstrap.self_check.provider_ready,
         "provider_profiles": list(bootstrap.provider_profiles),
         "config_source": bootstrap.config_source,

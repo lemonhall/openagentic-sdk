@@ -23,6 +23,7 @@ def build_remote_http_worker_from_remote_config(
     bootstrap = load_remote_cluster_bootstrap(repo_root=repo_root, config_path=remote_config_path, env=env)
     session_store = FileSessionStore(root_dir=Path(session_root))
     health_status: dict[str, object] = {
+        "deployment_mode": "real-model",
         "provider_ready": bootstrap.self_check.provider_ready,
         "provider_profiles": list(bootstrap.provider_profiles),
         "config_source": bootstrap.config_source,

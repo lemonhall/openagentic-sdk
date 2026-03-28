@@ -58,7 +58,8 @@ class K3dSmokeHostProvider:
         _ = api_key
         user_messages = [m.get("content") for m in messages if m.get("role") == "user"]
         user_text = user_messages[-1] if user_messages else ""
-        has_tool_output = any(m.get("role") == "tool" for m in messages)
+        last_user_index = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=-1)
+        has_tool_output = any(m.get("role") == "tool" for m in messages[last_user_index + 1 :])
 
         if user_text == "TASK_A" and not has_tool_output:
             return ModelOutput(

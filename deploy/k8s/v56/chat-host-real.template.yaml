@@ -40,8 +40,8 @@ __OA_REMOTE_ENV_BLOCK__
               --session-root /tmp/openagentic-cluster-chat
               --remote-config /workspace/repo/openagentic.remote.json
               --host-node-name-env OA_HOST_NODE_NAME
-              --node-url k3d-v56-openagentic-agent-0=http://$OA_REMOTE_WORKER_AGENT_0_SERVICE_HOST:8765
-              --node-url k3d-v56-openagentic-agent-1=http://$OA_REMOTE_WORKER_AGENT_1_SERVICE_HOST:8765
+              --node-url k3d-v56-openagentic-agent-0=http://oa-remote-worker-agent-0.openagentic-v56-real.svc.cluster.local:8765
+              --node-url k3d-v56-openagentic-agent-1=http://oa-remote-worker-agent-1.openagentic-v56-real.svc.cluster.local:8765
           ports:
             - containerPort: 8766
           readinessProbe:

@@ -148,6 +148,34 @@ RIGHTCODE_BASE_URL=...
 RIGHTCODE_API_KEY=...
 ```
 
+如果你在 Windows 11 本机用 k3d，并且希望 real cluster 内的 `WebSearch` / `WebFetch` 能借助本机代理出网，先启动一个 WSL host relay，再把 proxy env 写进 `.openagentic.remote.env`。
+
+启动 relay：
+
+```powershell
+wsl -u root -e bash -lc 'nohup python3 /mnt/e/development/openagentic-sdk/scripts/k3d_host_proxy_relay.py --listen-host 0.0.0.0 --listen-port 17897 --upstream-host 127.0.0.1 --upstream-port 7897 >/tmp/oa-k3d-proxy-relay.log 2>&1 </dev/null & echo $! >/tmp/oa-k3d-proxy-relay.pid; cat /tmp/oa-k3d-proxy-relay.pid'
+```
+
+停止 relay：
+
+```powershell
+wsl -u root -e bash -lc 'if [ -f /tmp/oa-k3d-proxy-relay.pid ]; then kill $(cat /tmp/oa-k3d-proxy-relay.pid); rm -f /tmp/oa-k3d-proxy-relay.pid; fi'
+```
+
+对应的 `.openagentic.remote.env` 追加：
+
+```text
+HTTP_PROXY=http://host.k3d.internal:17897
+HTTPS_PROXY=http://host.k3d.internal:17897
+NO_PROXY=127.0.0.1,localhost,.svc,.cluster.local
+```
+
+说明：
+
+- `host.k3d.internal` 在 pod 内指向 k3d/docker host；
+- WSL 能访问 Windows 的 `127.0.0.1:7897`，所以 relay 可以把 pod 流量转回你本机代理；
+- 当前 real chat-host 会用 worker service 的 DNS 名称（`.svc.cluster.local`）派发 remote task，所以 `NO_PROXY` 里保留 `.svc,.cluster.local` 即可；不要指望 Python `urllib` 对 `10.43.0.0/16` 这种 CIDR 一定生效。
+
 ### Step 3. 先把本地三节点 k3d 基础环境准备出来
 
 最稳的方式，仍然是先跑一次现有 smoke chat bring-up。  
@@ -444,6 +472,7 @@ wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sd
 - `openagentic.remote.example.json`
 - `.openagentic.remote.env.example`
 - `scripts/apply_v56_real_cluster.py`
+- `scripts/k3d_host_proxy_relay.py`
 - `deploy/k8s/v56/chat-host-real.template.yaml`
 - `deploy/k3d/v56-workers-real.template.yaml`
 - `deploy/k8s/v56/chat-host.yaml`

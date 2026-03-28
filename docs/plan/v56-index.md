@@ -86,7 +86,8 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - k3d 自带 `image import` 在当前 Docker/k3d 组合下会对 multi-arch tar 报假成功；M1 通过 `docker image save --platform linux/amd64` + 节点内 `ctr images import` 预加载 `rancher/mirrored-pause:3.6` 与 `python:3.12-slim`，保证 worker pod 可启动。
 - M2 已落地成“cluster-hosted chat host + 本地 CLI remote bridge + session-end committed sync + dirty-worktree 阻塞 + k3d 三节点 chat smoke”。
 - cluster host 在容器内不依赖系统 `git` 可执行文件：有 `git` 时走真实 Git contract，无 `git` 时使用启动时工作树基线判定 dirty，并显式忽略 `__pycache__` 这类运行时噪音。
-- cluster host 对 remote worker 的寻址改为依赖 Kubernetes Service 注入的 `*_SERVICE_HOST` 环境变量，而不是 pod 内 DNS，避免首次派发时的解析波动。
+- Windows 11 + 本地 k3d 的 real-model 路径里，`WebSearch` / `WebFetch` 通过 WSL host relay（`scripts/k3d_host_proxy_relay.py`）把 pod 流量转回本机代理，再由 `host.k3d.internal` 暴露给集群。
+- real-model chat host 对 remote worker 的寻址改为 worker service DNS（`.svc.cluster.local`），避免在配置 `HTTP_PROXY/HTTPS_PROXY` 后，内部 `Task` 派发因为 service IP 未命中 `NO_PROXY` 而误送进代理。
 - M3 目标是把“固定触发词 smoke”推进到“具名 remote subagent + 自然语言路由 + 单 worker 默认并发 3 的受控执行”。
 - M4 目标是把当前 smoke provider 驱动的 cluster host / workers 推进到“真实 provider 驱动的真 agent”，同时把远程集群配置层从本地 `oa chat` 配置中独立出来。
 - M4 已完成：host / worker 的真实 provider bootstrap、自检、provider spec 下发、env 注入模板渲染、real-model `/health` 与真实闲聊都已验证；同时补上了 smoke / real-model 显式模式标识与 CLI 启动预警，避免把 smoke host 误判成真 agent。

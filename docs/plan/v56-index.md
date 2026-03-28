@@ -90,3 +90,4 @@ v56 的目标不是立刻做成“生产级分布式 agent 平台”，而是先
 - M3 目标是把“固定触发词 smoke”推进到“具名 remote subagent + 自然语言路由 + 单 worker 默认并发 3 的受控执行”。
 - M4 目标是把当前 smoke provider 驱动的 cluster host / workers 推进到“真实 provider 驱动的真 agent”，同时把远程集群配置层从本地 `oa chat` 配置中独立出来。
 - M4 自动化部分已经完成：host / worker 的真实 provider bootstrap、自检、provider spec 下发、env 注入模板渲染都已验证；剩余差异是需要用户提供真实供应商凭据后做一次 real-model 手工验收。
+- 本地 k3d 三节点环境额外暴露出一个基础设施问题：node 对 Docker Hub 的 443 出站不稳定时，`kube-system` 的 `coredns` / `metrics-server` / `local-path-provisioner` / `traefik` 相关镜像会卡在 `ImagePullBackOff`；v56 现已在 `e2e_k3d_tests/_harness.py` 里把这些系统镜像一起预加载，避免 fresh cluster 出现 pod DNS 全挂。

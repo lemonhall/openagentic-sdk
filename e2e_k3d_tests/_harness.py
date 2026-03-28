@@ -22,6 +22,17 @@ WORKER_B_DEPLOYMENT = "oa-remote-worker-agent-1"
 CHAT_HOST_DEPLOYMENT = "oa-cluster-chat-host"
 CHAT_HOST_SERVICE = "oa-cluster-chat-host"
 
+_PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
+    ("rancher/mirrored-pause:3.6", "docker.io/rancher/mirrored-pause:3.6"),
+    ("python:3.12-slim", "docker.io/library/python:3.12-slim"),
+    ("rancher/mirrored-coredns-coredns:1.12.0", "docker.io/rancher/mirrored-coredns-coredns:1.12.0"),
+    ("rancher/local-path-provisioner:v0.0.30", "docker.io/rancher/local-path-provisioner:v0.0.30"),
+    ("rancher/mirrored-metrics-server:v0.7.2", "docker.io/rancher/mirrored-metrics-server:v0.7.2"),
+    ("rancher/klipper-helm:v0.9.3-build20241008", "docker.io/rancher/klipper-helm:v0.9.3-build20241008"),
+    ("rancher/klipper-lb:v0.4.9", "docker.io/rancher/klipper-lb:v0.4.9"),
+    ("rancher/mirrored-library-traefik:2.11.18", "docker.io/rancher/mirrored-library-traefik:2.11.18"),
+)
+
 _READY = False
 
 
@@ -55,6 +66,7 @@ def ensure_cluster_ready() -> None:
 
     _preload_node_images()
     _run(["kubectl", "config", "use-context", f"k3d-{CLUSTER_NAME}"])
+    _ensure_kube_system_ready()
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k3d" / "v56-workers.yaml")])
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v56" / "chat-host.yaml")])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=180s"])
@@ -130,27 +142,45 @@ def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[s
 
 
 def _preload_node_images() -> None:
-    pause_tar = Path(tempfile.gettempdir()) / "openagentic-v56-pause-amd64.tar"
-    python_tar = Path(tempfile.gettempdir()) / "openagentic-v56-python312-amd64.tar"
+    tar_root = Path(tempfile.gettempdir())
+    for image_ref, expected_ref in _PRELOAD_IMAGES:
+        _ensure_image_present(image_ref)
+        safe_name = image_ref.replace("/", "_").replace(":", "_")
+        tar_path = tar_root / f"openagentic-v56-{safe_name}-amd64.tar"
+        _run(["docker", "image", "save", "--platform", "linux/amd64", image_ref, "-o", str(tar_path)])
+        remote_tar_path = f"/tmp/{safe_name}-amd64.tar"
+        for node_name in (SERVER_NODE, AGENT_A_NODE, AGENT_B_NODE):
+            _import_image(
+                node_name=node_name,
+                tar_path=tar_path,
+                remote_tar_path=remote_tar_path,
+                expected_ref=expected_ref,
+            )
 
-    _ensure_image_present("rancher/mirrored-pause:3.6")
-    _ensure_image_present("python:3.12-slim")
-    _run(["docker", "image", "save", "--platform", "linux/amd64", "rancher/mirrored-pause:3.6", "-o", str(pause_tar)])
-    _run(["docker", "image", "save", "--platform", "linux/amd64", "python:3.12-slim", "-o", str(python_tar)])
 
-    for node_name in (SERVER_NODE, AGENT_A_NODE, AGENT_B_NODE):
-        _import_image(
-            node_name=node_name,
-            tar_path=pause_tar,
-            remote_tar_path="/tmp/pause-amd64.tar",
-            expected_ref="docker.io/rancher/mirrored-pause:3.6",
-        )
-        _import_image(
-            node_name=node_name,
-            tar_path=python_tar,
-            remote_tar_path="/tmp/python312-amd64.tar",
-            expected_ref="docker.io/library/python:3.12-slim",
-        )
+def _ensure_kube_system_ready() -> None:
+    stuck_pods = _image_pull_backoff_pods(namespace="kube-system")
+    if stuck_pods:
+        _run(["kubectl", "-n", "kube-system", "delete", "pod", *stuck_pods], check=False)
+    _run(["kubectl", "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=300s"])
+    _run(["kubectl", "-n", "kube-system", "rollout", "status", "deployment/local-path-provisioner", "--timeout=300s"])
+    _run(["kubectl", "-n", "kube-system", "rollout", "status", "deployment/metrics-server", "--timeout=300s"], check=False)
+
+
+def _image_pull_backoff_pods(*, namespace: str) -> list[str]:
+    proc = _run(["kubectl", "-n", namespace, "get", "pods", "--no-headers"], check=False)
+    names: list[str] = []
+    for raw in proc.stdout.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        status = parts[2]
+        if status in {"ImagePullBackOff", "ErrImagePull"}:
+            names.append(parts[0])
+    return names
 
 
 def _import_image(*, node_name: str, tar_path: Path, remote_tar_path: str, expected_ref: str) -> None:

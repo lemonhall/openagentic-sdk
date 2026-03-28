@@ -29,6 +29,7 @@ coverage.xml
 .openagentic_e2e_reports/
 .openagentic-rendered/
 .openagentic-rendered-smoke/
+.openagentic-rendered-local/
 
 # Local secrets (do not commit)
 .env

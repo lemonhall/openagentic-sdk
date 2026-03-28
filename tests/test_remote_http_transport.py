@@ -94,6 +94,7 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handle.target_node, "node-http")
         self.assertEqual(handle.git_revision, git_revision)
         self.assertTrue(handle.child_session_id)
+        self.assertTrue(handle.worker_execution_id)
         self.assertTrue(child_events)
         self.assertTrue(all(getattr(event, "agent_name", None) == "worker_remote" for event in child_events))
         self.assertTrue(all(getattr(event, "parent_tool_use_id", None) == "call_task" for event in child_events))

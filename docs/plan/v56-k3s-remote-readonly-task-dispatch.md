@@ -41,13 +41,15 @@
 - v56 采用**长驻 node worker**，原因是它更接近当前 child event stream 语义；如果改成 Job-per-task，会把“父会话实时消费 child 事件”降级成“只拿最终结果”，这不符合 PRD。
 - 远程 agent 的 authoritative 代码版本以 dispatch 时解析出的 commit SHA 为准；如果当前工作区 dirty，M1 可以先报错而不是自动同步。
 - 远程 agent 的默认工具白名单建议只包含：`Read`、`Glob`、`Grep`、必要时 `WebFetch`；不得默认带写类工具。
+- 在本机 WSL2 上，`/mnt/e/...` 工作树会被 Git 视作 dirty；M1 smoke 必须先把当前 `HEAD` checkout 到 `/tmp/openagentic-v56-mirror-<head>`，再把这份干净镜像作为 authoritative workspace 挂进 k3d 节点。
+- 当前 Docker 29 + k3d 5.8.3 组合下，`k3d image import` 对 multi-arch tar 会报假成功；M1 的节点预热方式固定为：`docker image save --platform linux/amd64 ...` 后进入各节点执行 `ctr -n k8s.io images import`。
 
 ## Acceptance (DoD)
 
 必须全部满足：
 
 1) 单元/集成：
-   - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard`
+   - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_http_transport`
 2) WSL2/k3d smoke：
    - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_task_*.py" -v'`
 3) 反作弊条款：
@@ -63,14 +65,21 @@
 - `openagentic_sdk/subagents/remote_types.py`
 - `openagentic_sdk/subagents/remote_dispatch.py`
 - `openagentic_sdk/subagents/remote_worker.py`
+- `openagentic_sdk/subagents/remote_http.py`
+- `openagentic_sdk/subagents/remote_http_worker_server.py`
+- `openagentic_sdk/subagents/k3d_dispatcher.py`
 - `openagentic_sdk/subagents/readonly_policy.py`
 - `tests/test_agent_config_mapping.py`
 - `tests/test_remote_task_dispatch.py`
 - `tests/test_remote_worker_protocol.py`
 - `tests/test_remote_readonly_guard.py`
+- `tests/test_remote_http_transport.py`
+- `e2e_k3d_tests/_harness.py`
+- `e2e_k3d_tests/_smoke_provider.py`
 - `e2e_k3d_tests/e2e_remote_task_dispatch_smoke.py`
 - `e2e_k3d_tests/e2e_remote_task_readonly_smoke.py`
 - `deploy/k3d/v56-cluster.yaml`
+- `deploy/k3d/v56-workers.yaml`
 
 ## Test Contract（先写死，后实现）
 
@@ -202,6 +211,7 @@
 - Date: 2026-03-28
 - Env: Windows 11 + PowerShell 7.x
 - Command + Result:
-  - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_cli_config tests.test_subagent_task tests.test_session_parent_child_link tests.test_slash_command_parts_parity` → OK（12 tests）
-  - `ruff check openagentic_cli/config.py openagentic_sdk/options.py openagentic_sdk/runtime_core/tool_task.py openagentic_sdk/subagents tests/test_agent_config_mapping.py tests/test_remote_task_dispatch.py tests/test_remote_worker_protocol.py tests/test_remote_readonly_guard.py --config ruff.toml` → OK
-  - `wsl -e bash -lc 'which docker || true; which kubectl || true; which k3d || true'` → 三者均不存在；k3d smoke 未执行
+  - `python -m unittest -q tests.test_agent_config_mapping tests.test_remote_task_dispatch tests.test_remote_worker_protocol tests.test_remote_readonly_guard tests.test_remote_http_transport` → OK（7 tests）
+  - `ruff check openagentic_sdk/runtime_core/tool_task.py openagentic_sdk/subagents/remote_types.py openagentic_sdk/subagents/remote_worker.py openagentic_sdk/subagents/remote_http.py openagentic_sdk/subagents/k3d_dispatcher.py e2e_k3d_tests tests/test_remote_task_dispatch.py tests/test_remote_worker_protocol.py tests/test_remote_http_transport.py --config ruff.toml` → OK
+  - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_task_*.py" -v'` → OK（3 tests；dispatch node A、dispatch node B、readonly guard）
+  - `wsl -e bash -lc 'cd /mnt/e/development/openagentic-sdk && kubectl -n openagentic-v56 get pods -o wide'` → `oa-remote-worker-agent-0` / `oa-remote-worker-agent-1` 均为 `Running`

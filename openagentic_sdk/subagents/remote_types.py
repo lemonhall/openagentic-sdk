@@ -11,6 +11,7 @@ class RemoteTaskDispatchHandle:
     child_session_id: str
     target_node: str
     git_revision: str
+    worker_execution_id: str | None
     events: AsyncIterator[Any]
 
 
@@ -24,6 +25,7 @@ class RemoteTaskRequest:
     cwd: str
     project_dir: str | None
     git_revision: str
+    worker_execution_id: str | None = None
 
     def make_handle(
         self,
@@ -31,12 +33,14 @@ class RemoteTaskRequest:
         child_session_id: str,
         target_node: str,
         git_revision: str,
+        worker_execution_id: str | None = None,
         events: AsyncIterator[Any],
     ) -> RemoteTaskDispatchHandle:
         return RemoteTaskDispatchHandle(
             child_session_id=child_session_id,
             target_node=target_node,
             git_revision=git_revision,
+            worker_execution_id=worker_execution_id,
             events=events,
         )
 

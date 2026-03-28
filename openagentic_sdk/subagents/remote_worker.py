@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 from ..options import OpenAgenticOptions
@@ -15,6 +16,7 @@ class InProcessRemoteTaskWorker:
     last_child_session_id: str | None = field(default=None, init=False)
 
     async def dispatch(self, request: RemoteTaskRequest) -> RemoteTaskDispatchHandle:
+        execution_id = request.worker_execution_id or uuid.uuid4().hex
         child_session_id = self.session_store.create_session(
             metadata={
                 "parent_session_id": request.parent_session_id,
@@ -23,6 +25,7 @@ class InProcessRemoteTaskWorker:
                 "dispatch_mode": request.definition.executor.kind,
                 "target_node": request.definition.executor.node_name,
                 "git_revision": request.git_revision,
+                "worker_execution_id": execution_id,
             }
         )
         self.last_child_session_id = child_session_id
@@ -76,5 +79,6 @@ class InProcessRemoteTaskWorker:
             child_session_id=child_session_id,
             target_node=request.definition.executor.node_name or "",
             git_revision=request.git_revision,
+            worker_execution_id=execution_id,
             events=_events(),
         )

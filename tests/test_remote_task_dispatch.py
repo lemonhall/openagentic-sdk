@@ -67,6 +67,7 @@ class RecordingRemoteDispatcher:
             child_session_id="b" * 32,
             target_node=request.definition.executor.node_name or "",
             git_revision=request.git_revision,
+            worker_execution_id="exec-123",
             events=_events(),
         )
 
@@ -128,6 +129,7 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["child_session_id"], "b" * 32)
         self.assertEqual(out["final_text"], "remote child done")
         self.assertEqual(out["git_revision"], request.git_revision)
+        self.assertEqual(out["worker_execution_id"], "exec-123")
 
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)

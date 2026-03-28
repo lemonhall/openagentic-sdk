@@ -51,6 +51,7 @@ class HttpRemoteTaskDispatcher:
         child_session_id = response.headers.get("X-OA-Child-Session-ID") or ""
         target_node = response.headers.get("X-OA-Target-Node") or ""
         git_revision = response.headers.get("X-OA-Git-Revision") or ""
+        worker_execution_id = response.headers.get("X-OA-Worker-Execution-ID") or None
         if not child_session_id or not target_node or not git_revision:
             response.close()
             raise RuntimeError("Remote task dispatch returned incomplete metadata headers")
@@ -97,6 +98,7 @@ class HttpRemoteTaskDispatcher:
             child_session_id=child_session_id,
             target_node=target_node,
             git_revision=git_revision,
+            worker_execution_id=worker_execution_id,
             events=_events(),
         )
 
@@ -182,6 +184,7 @@ class RemoteTaskHttpWorkerServer:
                     self.send_header("X-OA-Child-Session-ID", handle.child_session_id)
                     self.send_header("X-OA-Target-Node", handle.target_node)
                     self.send_header("X-OA-Git-Revision", handle.git_revision)
+                    self.send_header("X-OA-Worker-Execution-ID", handle.worker_execution_id or "")
                     self.end_headers()
 
                     async def _stream() -> None:

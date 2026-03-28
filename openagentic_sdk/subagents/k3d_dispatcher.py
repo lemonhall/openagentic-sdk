@@ -70,6 +70,7 @@ class K3dPortForwardRemoteTaskDispatcher:
             child_session_id=handle.child_session_id,
             target_node=handle.target_node,
             git_revision=handle.git_revision,
+            worker_execution_id=handle.worker_execution_id,
             events=_events(),
         )
 
@@ -133,14 +134,15 @@ class K3dPortForwardRemoteTaskDispatcher:
         raise RuntimeError("kubectl port-forward did not become ready in time")
 
     def _stop_port_forward(self, proc: subprocess.Popen[str]) -> None:
-        if proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5.0)
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5.0)
+        if proc.stdout is not None:
+            proc.stdout.close()
 
     def _pick_free_local_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

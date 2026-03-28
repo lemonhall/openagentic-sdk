@@ -8,10 +8,10 @@ import openagentic_sdk
 from e2e_k3d_tests._harness import (
     AGENT_A_NODE,
     AGENT_B_NODE,
+    authoritative_repo_root,
     build_dispatcher,
     current_git_head,
     ensure_cluster_ready,
-    repo_root,
 )
 from openagentic_sdk.options import (
     AgentDefinition,
@@ -63,14 +63,15 @@ class TestK3dRemoteTaskDispatchSmoke(unittest.IsolatedAsyncioTestCase):
         await self._assert_dispatch(agent_name="worker_b", node_name=AGENT_B_NODE)
 
     async def _assert_dispatch(self, *, agent_name: str, node_name: str) -> None:
+        workspace_root = authoritative_repo_root()
         with TemporaryDirectory() as td:
             store = FileSessionStore(root_dir=Path(td) / "sessions")
             options = OpenAgenticOptions(
                 provider=ParentTaskProvider(agent_name=agent_name, child_prompt="REPORT_NODE"),
                 model="fake",
                 api_key="x",
-                cwd=str(repo_root()),
-                project_dir=str(repo_root()),
+                cwd=str(workspace_root),
+                project_dir=str(workspace_root),
                 tools=default_tool_registry(),
                 permission_gate=PermissionGate(permission_mode="bypass"),
                 session_store=store,

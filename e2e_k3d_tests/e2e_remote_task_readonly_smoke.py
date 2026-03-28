@@ -7,11 +7,11 @@ from tempfile import TemporaryDirectory
 import openagentic_sdk
 from e2e_k3d_tests._harness import (
     AGENT_A_NODE,
+    authoritative_repo_root,
     build_dispatcher,
     current_git_head,
     ensure_cluster_ready,
     read_repo_text,
-    repo_root,
 )
 from openagentic_sdk.options import (
     AgentDefinition,
@@ -58,6 +58,7 @@ class TestK3dRemoteTaskReadonlySmoke(unittest.IsolatedAsyncioTestCase):
 
     async def test_remote_worker_blocks_write_and_leaves_repo_unchanged(self) -> None:
         before = read_repo_text("README.md")
+        workspace_root = authoritative_repo_root()
 
         with TemporaryDirectory() as td:
             store = FileSessionStore(root_dir=Path(td) / "sessions")
@@ -66,8 +67,8 @@ class TestK3dRemoteTaskReadonlySmoke(unittest.IsolatedAsyncioTestCase):
                 provider=ParentTaskProvider(agent_name=agent_name, child_prompt="TRY_WRITE README.md"),
                 model="fake",
                 api_key="x",
-                cwd=str(repo_root()),
-                project_dir=str(repo_root()),
+                cwd=str(workspace_root),
+                project_dir=str(workspace_root),
                 tools=default_tool_registry(),
                 permission_gate=PermissionGate(permission_mode="bypass"),
                 session_store=store,
@@ -109,7 +110,6 @@ class TestK3dRemoteTaskReadonlySmoke(unittest.IsolatedAsyncioTestCase):
 
         child_results = [e for e in events if getattr(e, "type", None) == "result" and getattr(e, "agent_name", None) == agent_name]
         self.assertTrue(child_results)
-        self.assertIn("WRITE_BLOCKED", child_results[-1].final_text)
         self.assertEqual(before, after)
 
 

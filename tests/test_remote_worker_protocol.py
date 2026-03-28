@@ -68,6 +68,7 @@ class TestRemoteWorkerProtocol(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(handle.target_node, "node-a")
             self.assertEqual(handle.git_revision, "abc1234")
             self.assertEqual(handle.child_session_id, worker.last_child_session_id)
+            self.assertTrue(handle.worker_execution_id)
             self.assertTrue(child_events)
             self.assertTrue(all(getattr(event, "agent_name", None) == "worker_remote" for event in child_events))
             self.assertTrue(all(getattr(event, "parent_tool_use_id", None) == "call_task" for event in child_events))
@@ -80,6 +81,7 @@ class TestRemoteWorkerProtocol(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(meta["metadata"]["dispatch_mode"], "k3s")
             self.assertEqual(meta["metadata"]["target_node"], "node-a")
             self.assertEqual(meta["metadata"]["git_revision"], "abc1234")
+            self.assertEqual(meta["metadata"]["worker_execution_id"], handle.worker_execution_id)
 
 
 if __name__ == "__main__":

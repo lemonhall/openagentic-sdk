@@ -112,6 +112,7 @@ class TaskToolMixin:
                         "dispatch_mode": "k3s",
                         "target_node": handle.target_node,
                         "git_revision": handle.git_revision,
+                        "worker_execution_id": handle.worker_execution_id,
                     },
                     is_error=False,
                     parent_tool_use_id=self._parent_tool_use_id,

@@ -23,6 +23,10 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def authoritative_repo_root() -> Path:
+    return ensure_git_mirror()
+
+
 def ensure_cluster_ready() -> None:
     global _READY
     if _READY:
@@ -32,9 +36,16 @@ def ensure_cluster_ready() -> None:
         if shutil.which(tool_name) is None:
             raise unittest.SkipTest(f"missing required tool: {tool_name}")
 
+    desired_head = current_git_head()
+    desired_mirror = ensure_git_mirror()
+
+    if _cluster_exists() and _cluster_head() != desired_head:
+        _run(["k3d", "cluster", "delete", CLUSTER_NAME], check=False)
+
     if not _cluster_exists():
-        rendered = _render_cluster_config()
+        rendered = _render_cluster_config(desired_mirror)
         _run(["k3d", "cluster", "create", "--config", str(rendered)])
+        _cluster_head_path().write_text(desired_head, encoding="utf-8")
 
     _preload_node_images()
     _run(["kubectl", "config", "use-context", f"k3d-{CLUSTER_NAME}"])
@@ -56,7 +67,7 @@ def current_git_head() -> str:
 
 
 def read_repo_text(rel_path: str) -> str:
-    return (repo_root() / rel_path).read_text(encoding="utf-8")
+    return (authoritative_repo_root() / rel_path).read_text(encoding="utf-8")
 
 
 def _cluster_exists() -> bool:
@@ -73,11 +84,11 @@ def _cluster_exists() -> bool:
     return False
 
 
-def _render_cluster_config() -> Path:
+def _render_cluster_config(mirror_root: Path) -> Path:
     template_path = repo_root() / "deploy" / "k3d" / "v56-cluster.yaml"
     rendered_path = Path(tempfile.gettempdir()) / "openagentic-v56-cluster.yaml"
     text = template_path.read_text(encoding="utf-8")
-    text = text.replace("__OA_REPO_ROOT__", str(repo_root()))
+    text = text.replace("__OA_REPO_ROOT__", str(mirror_root))
     rendered_path.write_text(text, encoding="utf-8")
     return rendered_path
 
@@ -90,8 +101,8 @@ def _preload_node_images() -> None:
     pause_tar = Path(tempfile.gettempdir()) / "openagentic-v56-pause-amd64.tar"
     python_tar = Path(tempfile.gettempdir()) / "openagentic-v56-python312-amd64.tar"
 
-    _run(["docker", "pull", "rancher/mirrored-pause:3.6"])
-    _run(["docker", "pull", "python:3.12-slim"])
+    _ensure_image_present("rancher/mirrored-pause:3.6")
+    _ensure_image_present("python:3.12-slim")
     _run(["docker", "image", "save", "--platform", "linux/amd64", "rancher/mirrored-pause:3.6", "-o", str(pause_tar)])
     _run(["docker", "image", "save", "--platform", "linux/amd64", "python:3.12-slim", "-o", str(python_tar)])
 
@@ -116,3 +127,36 @@ def _import_image(*, node_name: str, tar_path: Path, remote_tar_path: str, expec
     images = _run(["docker", "exec", node_name, "ctr", "-n", "k8s.io", "images", "ls"], check=False)
     if expected_ref not in images.stdout:
         raise RuntimeError(f"Failed to preload image '{expected_ref}' into node '{node_name}'")
+
+
+def _ensure_image_present(image_ref: str) -> None:
+    inspect = _run(["docker", "image", "inspect", image_ref], check=False)
+    if inspect.returncode == 0:
+        return
+    _run(["docker", "pull", image_ref])
+
+
+def ensure_git_mirror() -> Path:
+    mirror = _mirror_root_for_head(current_git_head())
+    if (mirror / ".git").exists():
+        return mirror
+    if mirror.exists():
+        shutil.rmtree(mirror)
+    _run(["git", "clone", "--no-hardlinks", "--no-checkout", str(repo_root()), str(mirror)])
+    _run(["git", "-C", str(mirror), "checkout", "--force", current_git_head()])
+    return mirror
+
+
+def _mirror_root_for_head(head: str) -> Path:
+    return Path(tempfile.gettempdir()) / f"openagentic-v56-mirror-{head[:12]}"
+
+
+def _cluster_head() -> str:
+    path = _cluster_head_path()
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def _cluster_head_path() -> Path:
+    return Path(tempfile.gettempdir()) / "openagentic-v56-cluster-head.txt"

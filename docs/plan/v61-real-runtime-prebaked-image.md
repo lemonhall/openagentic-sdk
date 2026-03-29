@@ -40,6 +40,20 @@
 - 不做远程仓库 push/pull 型镜像分发
 - 不顺手优化 cluster recreate 的其它慢点
 
+## Current Diagnosed Failure Mode
+
+2026-03-30 的现场诊断已经确认，当前 real runtime 的缺陷不只是“冷启动慢”，而是会直接把 Jaeger 观测结果带歪：
+
+- `openagentic-v56-real` 下的 `oa-cluster-chat-host` 与 `oa-remote-worker-*` 仍然先执行启动期 `pip install`
+- 它们依赖 `/workspace/repo/.openagentic-wheelhouse`
+- 当 wheelhouse 缺失时，Pod 会进入 `CrashLoopBackOff`
+- 现场日志已经抓到：
+  - `WARNING: Location '/workspace/repo/.openagentic-wheelhouse' is ignored`
+  - `ERROR: Could not find a version that satisfies the requirement protobuf<6`
+- 这时 Jaeger `http://127.0.0.1:16686/api/services` 只会返回 `jaeger-all-in-one`
+
+所以，这次你截图里“看不到 host 和 worker”并不是先看 UI/CSS，而是应先检查 real host / worker 是否已经真正起机并产出 span。
+
 ## Recommended Architecture
 
 ### 1. 新增本地 runtime image
@@ -105,6 +119,7 @@ v61 只承诺移除“运行时依赖安装”这段慢点，不承诺所有冷�
 - 冷启动时 logs / commands 中不再出现 `pip install`
 - `oa chat --k3d-real` 能在 WSL2 重启后恢复
 - Jaeger 与 transcript 不回归
+- Jaeger Search 里是否出现 `oa-cluster-chat-host-real` / `oa-remote-worker-real`，必须建立在 real rollout healthy 且至少完成一轮真实对话之后；否则 `service(1)` 只能说明还没有有效 real trace
 
 ## Acceptance
 
@@ -120,6 +135,9 @@ v61 只承诺移除“运行时依赖安装”这段慢点，不承诺所有冷�
    - 发送 `你好啊`
    - 成功收到回复
 4. Jaeger：
+   - 先确认：
+     - `wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-1 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s"'`
+   - 且完成上一条真实对话后，再检查：
    - `curl.exe http://127.0.0.1:16686/api/services`
    - 包含 `oa-cluster-chat-host-real` 与 `oa-remote-worker-real`
 5. 反作弊：
@@ -168,6 +186,7 @@ DoD：
 - 手工执行 `wsl --shutdown`
 - 再执行 `oa chat --k3d-real`
 - 验证真实对话、Jaeger UI、service 列表
+  - 注意：如果 service 列表仍只剩 `jaeger-all-in-one`，先查 `openagentic-v56-real` 是否 CrashLoop，不先查 Jaeger 前端
 - 更新手工测试文档
 
 DoD：
@@ -188,3 +207,6 @@ DoD：
 
 - 风险 4：运行时镜像缺失时，系统退回旧路径或表现成“莫名其妙很慢”。
   - 缓解：缺镜像快速失败，并打印明确的本地构建命令。
+
+- 风险 5：把 Jaeger Search 页里“没有 host / worker”误判成 UI 渲染问题，导致排查方向跑偏。
+  - 缓解：先查 `openagentic-v56-real` rollout 与 Pod 日志；只有 real host / worker healthy 且已产生真实对话后，Jaeger service 列表的判读才有意义。

@@ -13,6 +13,11 @@ v61 只做一件事：
   - `http://127.0.0.1:16686`
 - 但这条链在 `wsl --shutdown` 之后的首次恢复，不应该再被容器内依赖安装拖慢。
 
+补充一个已经确认的判读前提：
+
+- 如果 Jaeger Search 里暂时看不到 `oa-cluster-chat-host-real` / `oa-remote-worker-real`，v61 默认先检查 `openagentic-v56-real` 的 rollout / pod 日志；
+- 当前已确认，real host / worker 一旦因为启动期 `pip install` / wheelhouse 缺失而 CrashLoop，Jaeger service 列表就会退化成只剩 `jaeger-all-in-one`。
+
 ## Milestones
 
 - **M1: Runtime Image Contract**
@@ -36,6 +41,7 @@ v61 只做一件事：
   - DoD（命令证据）：
     - `wsl --shutdown`
     - `oa chat --k3d-real`
+    - `wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-1 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s"'`
     - `curl.exe http://127.0.0.1:16686/api/services`
   - Status: todo
 

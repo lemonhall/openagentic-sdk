@@ -17,6 +17,11 @@ v61 解决的是当前 `real-model` 冷启动路径里一个非常具体、但�
 - v57/v58/v59/v60 已建立的 actor、Jaeger、transcript、固定入口语义不被破坏；
 - v61 第一阶段只覆盖 `real-model host + real-model workers`，不顺手改 `smoke`。
 
+补充一个已经在现网实验环境里被明确诊断出来的外显症状：
+
+- 当 `real-model` 的 host / worker 因启动期依赖安装失败而未真正起来时，Jaeger Search 页面的 service 列表通常只会剩下 `jaeger-all-in-one`；
+- 也就是说，“看不到 `oa-cluster-chat-host-real` / `oa-remote-worker-real`”在 v61 语境下首先应被理解为 real runtime 没起来、没有 span 进 Jaeger，而不是先怀疑 Search UI 自己把服务名藏掉了。
+
 ## Non-Goals
 
 - v61 不改 `smoke cluster` 的镜像策略。
@@ -27,6 +32,19 @@ v61 解决的是当前 `real-model` 冷启动路径里一个非常具体、但�
 - v61 不做“所有依赖都预烘焙进一个万能镜像”的过度扩张；只覆盖 `real host/worker` 当前必需的 Python 运行时依赖。
 - v61 不引入 initContainer / sidecar / volume cache 作为主路径。
 - v61 不改变“real-model 仍以 authoritative mirror 的提交态为准”这一现有约束。
+
+## Diagnosed Failure Mode (2026-03-30)
+
+在当前 v60 之前的 real runtime 路径上，已经抓到一条稳定、可复现的失败链：
+
+- `openagentic-v56-real` 里的 `oa-cluster-chat-host` 与 `oa-remote-worker-*` 仍基于 `python:3.12-slim` 启动；
+- Pod command 仍然先执行：
+  - `python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse ...`
+- 当 `/workspace/repo/.openagentic-wheelhouse` 不存在或不可用时，容器会直接失败并进入 `CrashLoopBackOff`；
+- 典型日志为：
+  - `WARNING: Location '/workspace/repo/.openagentic-wheelhouse' is ignored`
+  - `ERROR: Could not find a version that satisfies the requirement protobuf<6`
+- 在这个故障态下，Jaeger `/api/services` 只剩 `jaeger-all-in-one` 是下游症状，不是独立的 Jaeger Search UI 缺陷。
 
 ## Requirements
 
@@ -111,6 +129,9 @@ v61 必须至少提供以下证据链：
    - 首次对话可正常返回
    - `http://127.0.0.1:16686` 仍可打开
    - Jaeger 中仍可看到 `oa-cluster-chat-host-real` 与 `oa-remote-worker-real`
+4. 判读约束：
+   - 对 Jaeger Search / `/api/services` 的检查，必须建立在 `openagentic-v56-real` 的 host / worker rollout healthy 且至少完成过一轮真实对话之后；
+   - 如果 `openagentic-v56-real` Pod 仍处于 `CrashLoopBackOff`，或尚未产生 fresh trace，那么 Jaeger 只显示 `jaeger-all-in-one` 应判定为 runtime / rollout 失败，不得误判为 Search UI 问题。
 
 ## Acceptance (DoD)
 
@@ -126,6 +147,11 @@ v61 必须至少提供以下证据链：
    - 再执行 `oa chat --k3d-real`
    - 首个 `你好啊` 成功返回
 4. Jaeger 回归：
+   - 先确认：
+     - `kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s`
+     - `kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-1 --timeout=180s`
+     - `kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s`
+   - 且在 `oa chat --k3d-real` 下至少完成一轮真实对话后，再检查：
    - `curl.exe http://127.0.0.1:16686/api/services`
    - 返回中包含：
      - `oa-cluster-chat-host-real`

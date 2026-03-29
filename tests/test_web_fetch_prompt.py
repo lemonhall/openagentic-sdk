@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,14 +43,16 @@ class WebFetchPromptProvider:
 
 class TestWebFetchPrompt(unittest.IsolatedAsyncioTestCase):
     async def test_web_fetch_prompt_generates_response(self) -> None:
-        def transport(url, headers):
-            _ = (url, headers)
-            return 200, {"content-type": "text/plain"}, b"hello world"
+        os.environ["TAVILY_API_KEY"] = "test"
+
+        def extract_transport(url, headers, payload):
+            _ = (url, headers, payload)
+            return {"results": [{"url": "https://example.com", "raw_content": "hello world"}]}
 
         with TemporaryDirectory() as td:
             root = Path(td)
             store = FileSessionStore(root_dir=root)
-            tools = ToolRegistry([WebFetchTool(transport=transport, allow_private_networks=True)])
+            tools = ToolRegistry([WebFetchTool(extract_transport=extract_transport, allow_private_networks=True)])
             options = OpenAgenticOptions(
                 provider=WebFetchPromptProvider(),
                 model="m",
@@ -68,4 +71,3 @@ class TestWebFetchPrompt(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -63,8 +63,7 @@ Set env (examples + CLI default to RIGHTCODE):
 - `RIGHTCODE_BASE_URL` (optional, default `https://www.right.codes/codex/v1`)
 - `RIGHTCODE_MODEL` (optional, default `gpt-5.2`)
 - `RIGHTCODE_TIMEOUT_S` (optional, default `120`)
-- `TAVILY_API_KEY` (optional; enables Tavily-backed `WebSearch` and `WebFetch` fallback extraction)
-- `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT` (optional; default `1` when `TAVILY_API_KEY` is set)
+- `TAVILY_API_KEY` (required for `WebSearch` and `WebFetch`)
 - `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT_DEPTH` (optional; `basic` or `advanced`, default `advanced`)
 
 Run unit tests:
@@ -196,7 +195,7 @@ Default registry includes:
 - `Read`, `Write`, `Edit`
 - `Glob`, `Grep`
 - `Bash`
-- `WebFetch` (direct HTTP(S); falls back to Tavily Extract for blocked/JS-shell pages when `TAVILY_API_KEY` is set)
+- `WebFetch` (Tavily Extract; requires `TAVILY_API_KEY`)
 - `WebSearch` (Tavily; requires `TAVILY_API_KEY`)
 - `TodoWrite`
 - `SlashCommand` (loads `.claude/commands/<name>.md`)

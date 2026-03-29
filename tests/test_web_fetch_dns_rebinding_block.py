@@ -1,11 +1,11 @@
 import unittest
 
+import openagentic_sdk.tools.web_fetch as wf
+from openagentic_sdk.tools.web_fetch import WebFetchTool
+
 
 class TestWebFetchDnsRebinding(unittest.TestCase):
     def test_blocks_hostname_resolving_to_private_ip(self) -> None:
-        from openagentic_sdk.tools.web_fetch import WebFetchTool
-        import openagentic_sdk.tools.web_fetch as wf
-
         def fake_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001,ANN002,ANN003
             _ = (host, port, args, kwargs)
             return [(None, None, None, None, ("127.0.0.1", 80))]

@@ -227,7 +227,7 @@ def tool_schemas_for_openai(
             "type": "function",
             "function": {
                 "name": "WebFetch",
-                "description": "Fetch a URL over HTTP(S), with optional Tavily Extract fallback for blocked or JS-shell pages.",
+                "description": "Fetch a public web page via Tavily Extract.",
                 "parameters": {
                     "type": "object",
                     "properties": {

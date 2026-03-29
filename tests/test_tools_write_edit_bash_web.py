@@ -51,14 +51,18 @@ class TestMoreTools(unittest.TestCase):
             else:
                 os.environ["PATH"] = old_path
 
-    def test_web_fetch_uses_transport(self) -> None:
-        def transport(url, headers):
-            return 200, {"content-type": "text/plain"}, b"ok"
+    def test_web_fetch_uses_extract_transport(self) -> None:
+        os.environ["TAVILY_API_KEY"] = "test"
 
-        tool = WebFetchTool(transport=transport, allow_private_networks=True)
+        def extract_transport(url, headers, payload):
+            _ = (url, headers, payload)
+            return {"results": [{"url": "https://example.com", "raw_content": "ok"}]}
+
+        tool = WebFetchTool(extract_transport=extract_transport, allow_private_networks=True)
         out = tool.run_sync({"url": "https://example.com"}, ToolContext(cwd="/"))
         self.assertEqual(out["status"], 200)
         self.assertEqual(out["text"], "ok")
+        self.assertEqual(out["backend"], "tavily_extract")
 
     def test_web_search_tavily_uses_transport(self) -> None:
         os.environ["TAVILY_API_KEY"] = "test"

@@ -82,11 +82,11 @@ These examples mirror the *scenario shape* of `claude-agent-sdk-python/examples/
 ## Advanced (more realistic workflows)
 
 Web (requires network):
-- `example/21_web_fetch_summarize.py` — `WebFetch` + in-tool summarization prompt
+- `example/21_web_fetch_summarize.py` — `WebFetch` + in-tool summarization prompt (`TAVILY_API_KEY` required)
 - `example/22_web_search_then_fetch_report.py` — `WebSearch` → `WebFetch` → `Write` report (`TAVILY_API_KEY` required); writes to `.openagentic-sdk/example-artifacts/22/report.md`
 - `example/23_web_search_domain_filters.py` — `WebSearch` domain allowlist (`TAVILY_API_KEY` required)
-- `example/33_web_fetch_json_extract.py` — `WebFetch` JSON endpoint + extraction prompt
-- `example/34_web_fetch_compare_and_write.py` — fetch 2 pages and write comparison
+- `example/33_web_fetch_json_extract.py` — `WebFetch` JSON endpoint + extraction prompt (`TAVILY_API_KEY` required)
+- `example/34_web_fetch_compare_and_write.py` — fetch 2 pages and write comparison (`TAVILY_API_KEY` required)
 
 Notebook:
 - `example/24_notebook_edit_research_report.py` — generate a notebook report via `NotebookEdit`

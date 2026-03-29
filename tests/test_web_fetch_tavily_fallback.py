@@ -6,11 +6,11 @@ from openagentic_sdk.tools.base import ToolContext
 from openagentic_sdk.tools.web_fetch import WebFetchTool
 
 
-class TestWebFetchTavilyFallback(unittest.TestCase):
-    def test_falls_back_to_tavily_extract_on_blocked_http_response(self) -> None:
+class TestWebFetchTavilyExtract(unittest.TestCase):
+    def test_uses_tavily_extract_as_primary_path(self) -> None:
         def transport(url, headers):
             _ = (url, headers)
-            return 403, {"content-type": "text/html"}, b"<html><body>Access denied. error code: 1010</body></html>"
+            return 200, {"content-type": "text/plain"}, b"direct content should not be used"
 
         def extract_transport(url, headers, payload):
             _ = headers
@@ -22,7 +22,7 @@ class TestWebFetchTavilyFallback(unittest.TestCase):
                 "results": [
                     {
                         "url": "https://example.com/report",
-                        "raw_content": "clean extracted content",
+                        "raw_content": "primary extracted content",
                     }
                 ]
             }
@@ -32,88 +32,54 @@ class TestWebFetchTavilyFallback(unittest.TestCase):
             out = tool.run_sync({"url": "https://example.com/report"}, ToolContext(cwd="/"))
 
         self.assertEqual(out["backend"], "tavily_extract")
-        self.assertEqual(out["fallback_reason"], "http_status:403")
         self.assertEqual(out["status"], 200)
-        self.assertEqual(out["direct_status"], 403)
-        self.assertEqual(out["text"], "clean extracted content")
+        self.assertEqual(out["text"], "primary extracted content")
 
-    def test_falls_back_to_tavily_extract_on_html_shell_page(self) -> None:
+    def test_requires_tavily_api_key(self) -> None:
         def transport(url, headers):
             _ = (url, headers)
-            html = (
-                "<html><head>"
-                "<script src='/static/app.js'></script>"
-                "<script src='/static/vendor.js'></script>"
-                "<script src='/static/runtime.js'></script>"
-                "</head><body><div id='app'></div></body></html>"
-            )
-            return 200, {"content-type": "text/html; charset=utf-8"}, html.encode("utf-8")
+            raise AssertionError("direct transport should not be used")
 
         def extract_transport(url, headers, payload):
             _ = (url, headers, payload)
-            return {"results": [{"url": "https://example.com/app", "raw_content": "rendered app text"}]}
+            raise AssertionError("extract transport should not be called without TAVILY_API_KEY")
 
         tool = WebFetchTool(transport=transport, extract_transport=extract_transport, allow_private_networks=True)
-        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}, clear=False):
-            out = tool.run_sync({"url": "https://example.com/app"}, ToolContext(cwd="/"))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TAVILY_API_KEY", None)
+            with self.assertRaises(RuntimeError):
+                tool.run_sync({"url": "https://example.com/app"}, ToolContext(cwd="/"))
 
-        self.assertEqual(out["backend"], "tavily_extract")
-        self.assertEqual(out["fallback_reason"], "html_shell")
-        self.assertEqual(out["text"], "rendered app text")
-
-    def test_falls_back_to_tavily_extract_on_placeholder_heavy_quote_page(self) -> None:
+    def test_custom_headers_are_rejected(self) -> None:
         def transport(url, headers):
             _ = (url, headers)
-            nav = "财经 焦点 股票 新股 期指 期权 行情 数据 全球 美股 港股 期货 外汇 黄金 银行 基金 理财 保险 债券 视频 股吧 财富号 搜索 "
-            quote = "上证 ： - - - - 深证 ： - - - - 港股通 - 资金流入 - 沪股通 - 资金流入 - 深股通 - 资金流入 - "
-            html = (
-                "<html><head>"
-                "<script src='/static/a.js'></script>"
-                "<script src='/static/b.js'></script>"
-                "<script src='/static/c.js'></script>"
-                "<script src='/static/d.js'></script>"
-                "<script src='/static/e.js'></script>"
-                "<script src='/static/f.js'></script>"
-                "<script src='/static/g.js'></script>"
-                "<script src='/static/h.js'></script>"
-                "</head><body><div id='app'>"
-                f"黄金9999 行情中心 {nav * 8} {quote * 12}"
-                "</div></body></html>"
-            )
-            return 200, {"content-type": "text/html; charset=utf-8"}, html.encode("utf-8")
+            raise AssertionError("direct transport should not be used")
 
         def extract_transport(url, headers, payload):
             _ = (url, headers, payload)
-            return {"results": [{"url": "https://example.com/quote", "raw_content": "live quote text"}]}
+            raise AssertionError("extract transport should not be called when headers are unsupported")
 
         tool = WebFetchTool(transport=transport, extract_transport=extract_transport, allow_private_networks=True)
         with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}, clear=False):
-            out = tool.run_sync({"url": "https://example.com/quote"}, ToolContext(cwd="/"))
+            with self.assertRaises(ValueError):
+                tool.run_sync(
+                    {"url": "https://example.com/private", "headers": {"authorization": "Bearer token"}},
+                    ToolContext(cwd="/"),
+                )
 
-        self.assertEqual(out["backend"], "tavily_extract")
-        self.assertEqual(out["fallback_reason"], "html_shell")
-        self.assertEqual(out["text"], "live quote text")
-
-    def test_custom_headers_keep_direct_fetch_semantics(self) -> None:
+    def test_private_hosts_are_rejected_even_when_allow_private_networks_is_true(self) -> None:
         def transport(url, headers):
-            self.assertEqual(url, "https://example.com/private")
-            self.assertEqual(headers, {"authorization": "Bearer token"})
-            return 403, {"content-type": "text/plain"}, b"forbidden"
+            _ = (url, headers)
+            raise AssertionError("direct transport should not be used")
 
         def extract_transport(url, headers, payload):
             _ = (url, headers, payload)
-            raise AssertionError("tavily extract should not run when custom headers are requested")
+            raise AssertionError("private host should never be sent to Tavily")
 
         tool = WebFetchTool(transport=transport, extract_transport=extract_transport, allow_private_networks=True)
         with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}, clear=False):
-            out = tool.run_sync(
-                {"url": "https://example.com/private", "headers": {"authorization": "Bearer token"}},
-                ToolContext(cwd="/"),
-            )
-
-        self.assertEqual(out["backend"], "direct")
-        self.assertEqual(out["status"], 403)
-        self.assertEqual(out["text"], "forbidden")
+            with self.assertRaises(ValueError):
+                tool.run_sync({"url": "http://localhost/private"}, ToolContext(cwd="/"))
 
 
 if __name__ == "__main__":

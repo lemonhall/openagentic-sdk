@@ -173,13 +173,9 @@ NO_PROXY=127.0.0.1,localhost,.svc,.cluster.local
 
 补充说明：
 
-- 现在 `WebFetch` 在 pod 内遇到典型反爬页或 JS 空壳页时，会尝试 Tavily Extract fallback；
-- 所以如果你希望 `research` 的网页抓取更稳定，`TAVILY_API_KEY` 也应写进 `.openagentic.remote.env`；
-- 如需强制关闭这个 fallback，可以额外写：
-
-```text
-OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT=0
-```
+- 现在 `WebFetch` 在 pod 内直接走 Tavily Extract，不再先做一层本地直抓；
+- 所以如果你希望 `research` 的网页抓取可用，`TAVILY_API_KEY` 必须写进 `.openagentic.remote.env`；
+- `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT_DEPTH=advanced` 可以保留，用于更偏重 JS 页面提取。
 
 说明：
 

@@ -86,6 +86,13 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
                 agent_name="worker",
                 parent_tool_use_id="call_task",
             )
+            yield Result(
+                final_text="control handled",
+                session_id="child-session",
+                stop_reason="end",
+                agent_name="worker",
+                parent_tool_use_id="call_task",
+            )
 
         handle = await transport.spawn(
             ActorSpawnSpec(
@@ -123,8 +130,9 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mailbox_store.head_seq("exec-2", "control"), 1)
         self.assertEqual(registry.get("exec-2").mailbox_heads["control"], 1)
         self.assertEqual(registry.get("exec-2").state, "exited")
-        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(len(envelopes), 2)
         self.assertEqual(event_from_dict(envelopes[0].payload["event"]).text, "got noop")
+        self.assertEqual(event_from_dict(envelopes[1].payload["event"]).final_text, "control handled")
 
     async def test_send_ignores_duplicate_message_id_instead_of_delivering_twice(self) -> None:
         from openagentic_sdk.subagents.actor_local_transport import LocalActorTransport

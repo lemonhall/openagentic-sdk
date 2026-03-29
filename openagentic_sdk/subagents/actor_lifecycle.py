@@ -9,6 +9,13 @@ ActorDownReasonKind = Literal["normal", "child_exit_error", "transport_lost", "r
 ActorDownFinalState = Literal["exited", "failed", "aborted"]
 
 
+class RemoteWorkerStreamError(RuntimeError):
+    def __init__(self, *, error_type: str, error_message: str) -> None:
+        self.remote_error_type = error_type
+        self.remote_error_message = error_message
+        super().__init__(f"Remote task worker stream failed ({error_type}): {error_message}")
+
+
 @dataclass(frozen=True, slots=True)
 class ActorDownEvent:
     execution_id: str
@@ -43,9 +50,9 @@ def classify_child_result_down(
         return ActorDownEvent(
             execution_id=execution_id,
             actor_id=actor_id,
-            reason_kind="normal",
+            reason_kind="child_exit_error",
             reason_detail="stream_closed_without_result",
-            final_state="exited",
+            final_state="failed",
             dispatch_mode=dispatch_mode,
             child_session_id=child_session_id,
             target_node=target_node,
@@ -149,8 +156,7 @@ def classify_remote_exception_down(
     target_node: str | None = None,
     worker_execution_id: str | None = None,
 ) -> ActorDownEvent:
-    message = str(exc)
-    if isinstance(exc, RuntimeError) and message.startswith("Remote task worker stream failed"):
+    if isinstance(exc, RemoteWorkerStreamError):
         reason_kind: ActorDownReasonKind = "remote_worker_error"
     elif isinstance(exc, (ConnectionError, OSError, TimeoutError)):
         reason_kind = "transport_lost"

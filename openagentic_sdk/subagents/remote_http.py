@@ -20,6 +20,7 @@ from ..options import (
 from ..remote_cluster_config import ResolvedRemoteProviderSpec, build_provider_from_spec
 from ..serialization import event_from_dict, event_to_dict
 from ..sessions.store import FileSessionStore
+from .actor_lifecycle import RemoteWorkerStreamError
 from .remote_dispatch import resolve_git_head_only
 from .remote_types import RemoteTaskRequest
 from .remote_worker import InProcessRemoteTaskWorker
@@ -436,4 +437,4 @@ def _remote_stream_error_from_payload(obj: Mapping[str, Any]) -> RuntimeError | 
     error_message = raw.get("error_message")
     type_text = error_type if isinstance(error_type, str) and error_type else "RemoteWorkerError"
     message_text = error_message if isinstance(error_message, str) and error_message else "unknown remote stream failure"
-    return RuntimeError(f"Remote task worker stream failed ({type_text}): {message_text}")
+    return RemoteWorkerStreamError(error_type=type_text, error_message=message_text)

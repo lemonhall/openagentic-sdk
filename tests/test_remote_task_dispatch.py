@@ -133,7 +133,9 @@ class RemoteWorkerErrorDispatcher:
         self.requests.append(request)
 
         async def _events():
-            raise RuntimeError("Remote task worker stream failed (ValueError): bad parse")
+            from openagentic_sdk.subagents.actor_lifecycle import RemoteWorkerStreamError
+
+            raise RemoteWorkerStreamError(error_type="ValueError", error_message="bad parse")
             yield  # pragma: no cover
 
         return request.make_handle(
@@ -143,6 +145,15 @@ class RemoteWorkerErrorDispatcher:
             worker_execution_id="exec-worker-error",
             events=_events(),
         )
+
+
+class DispatchFailRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+        raise ConnectionResetError("socket reset during dispatch")
 
 
 class RemoteTaskNoOutputProvider:
@@ -370,6 +381,51 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(task_result.is_error)
         self.assertEqual(task_result.output["down"]["reason_kind"], "remote_worker_error")
+
+    async def test_k3s_dispatch_failure_surfaces_structured_down_and_supervisor(self) -> None:
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = DispatchFailRemoteDispatcher()
+
+            options = OpenAgenticOptions(
+                provider=RemoteTaskNoOutputProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for e in openagentic_sdk.query(prompt="PARENT_REMOTE_NO_OUTPUT: delegate", options=options):
+                events.append(e)
+
+        self.assertEqual(len(dispatcher.requests), 1)
+        task_result = next(
+            event for event in events if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+        )
+        self.assertTrue(task_result.is_error)
+        self.assertEqual(task_result.output["down"]["reason_kind"], "transport_lost")
+        self.assertEqual(task_result.output["supervisor"]["action"], "fail_parent_tool_use")
+        self.assertEqual(getattr(events[-1], "final_text", None), "parent remote saw task failure")
 
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)

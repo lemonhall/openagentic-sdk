@@ -31,7 +31,7 @@
 
 - `down` 必须是结构化事件，不能只是“最后来一个 error string”。
 - supervisor 的输入应是结构化 failure class，例如：
-  - `child_exit_normal`
+  - `normal`
   - `child_exit_error`
   - `transport_lost`
   - `remote_worker_error`

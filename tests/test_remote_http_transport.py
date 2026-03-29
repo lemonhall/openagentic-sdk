@@ -73,6 +73,7 @@ class FailingBaseProvider:
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
     async def test_http_remote_worker_dispatcher_surfaces_child_stream_failure_without_json_corruption(self) -> None:
+        from openagentic_sdk.subagents.actor_lifecycle import RemoteWorkerStreamError
         from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
 
         class FailingStreamRemoteTaskWorker:
@@ -150,13 +151,16 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(RuntimeError) as ctx:
                         async for _event in handle.events:
                             pass
+                    down = await asyncio.wait_for(handle.down_future, timeout=1.0)
                 finally:
                     httpd.shutdown()
                     httpd.server_close()
                     thread.join(timeout=5.0)
 
+        self.assertIsInstance(ctx.exception, RemoteWorkerStreamError)
         self.assertIn("Remote task worker stream failed", str(ctx.exception))
         self.assertIn("boom from child stream", str(ctx.exception))
+        self.assertEqual(down.reason_kind, "remote_worker_error")
 
     async def test_http_remote_worker_dispatcher_survives_idle_gaps_after_headers(self) -> None:
         from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer

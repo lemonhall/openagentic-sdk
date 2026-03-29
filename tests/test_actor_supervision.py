@@ -79,6 +79,42 @@ class TestActorSupervision(unittest.IsolatedAsyncioTestCase):
         self.assertIn("boom", down.reason_detail or "")
         self.assertEqual(registry.get("exec-failed").last_down, down)
 
+    async def test_local_transport_without_result_is_child_exit_error(self) -> None:
+        from openagentic_sdk.events import AssistantMessage
+        from openagentic_sdk.subagents.actor_lifecycle import ActorDownEvent
+        from openagentic_sdk.subagents.actor_local_transport import LocalActorTransport
+        from openagentic_sdk.subagents.actor_mailbox import ActorMailboxStore
+        from openagentic_sdk.subagents.actor_registry import ActorExecutionRegistry
+        from openagentic_sdk.subagents.actor_transport import ActorSpawnSpec
+
+        registry = ActorExecutionRegistry()
+        transport = LocalActorTransport(registry=registry, mailbox_store=ActorMailboxStore())
+
+        async def run_child(_control_messages):
+            yield AssistantMessage(text="child ended without result")
+
+        handle = await transport.spawn(
+            ActorSpawnSpec(
+                execution_id="exec-missing-result",
+                parent_actor_id="host",
+                child_actor_id="worker/exec-missing-result",
+                agent_name="worker",
+                dispatch_mode="local",
+                child_session_id="child-session",
+                run=run_child,
+            )
+        )
+
+        async for _ in transport.receive(handle):
+            pass
+        await transport.close(handle)
+
+        down = await asyncio.wait_for(handle.down_future, timeout=1.0)
+        self.assertIsInstance(down, ActorDownEvent)
+        self.assertEqual(down.reason_kind, "child_exit_error")
+        self.assertEqual(down.final_state, "failed")
+        self.assertEqual(registry.get("exec-missing-result").last_down, down)
+
     async def test_local_transport_emits_structured_down_for_abort(self) -> None:
         from openagentic_sdk.subagents.actor_lifecycle import ActorDownEvent
         from openagentic_sdk.subagents.actor_local_transport import LocalActorTransport

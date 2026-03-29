@@ -228,6 +228,65 @@ class TaskToolMixin:
         with contextlib.suppress(KeyError):
             registry.record_down(down.execution_id, down)
 
+    def _task_dispatch_failure_result(
+        self,
+        *,
+        tool_use_id: str,
+        agent: str,
+        dispatch_mode: str,
+        git_revision: str | None,
+        target_node: str | None,
+        execution_id: str,
+        exc: BaseException,
+        supervisor_policy: str,
+        retry_count: int,
+    ) -> tuple[ToolResult, SupervisorDecision]:
+        down = self._classify_dispatch_failure_down(
+            execution_id=execution_id,
+            agent=agent,
+            dispatch_mode=dispatch_mode,
+            target_node=target_node,
+            exc=exc,
+        )
+        decision = ActorSupervisor.decide(policy=supervisor_policy, down=down, retry_count=retry_count)
+        return (
+            self._task_child_result(
+                tool_use_id=tool_use_id,
+                agent=agent,
+                child_session_id="",
+                child_final_text="",
+                child_stop_reason=None,
+                dispatch_mode=dispatch_mode,
+                down=down,
+                supervisor=decision,
+                target_node=target_node,
+                git_revision=git_revision,
+                worker_execution_id=execution_id,
+                execution_id=execution_id,
+            ),
+            decision,
+        )
+
+    def _classify_dispatch_failure_down(
+        self,
+        *,
+        execution_id: str,
+        agent: str,
+        dispatch_mode: str,
+        target_node: str | None,
+        exc: BaseException,
+    ) -> ActorDownEvent:
+        from ..subagents.actor_lifecycle import classify_remote_exception_down
+
+        return classify_remote_exception_down(
+            execution_id=execution_id,
+            actor_id=agent,
+            dispatch_mode=dispatch_mode,
+            exc=exc,
+            target_node=target_node,
+            worker_execution_id=execution_id,
+        )
+
     def _supervisor_policy(self, agent: str) -> str:
         definition = self._options.agents.get(agent)
         if definition is None:
@@ -326,6 +385,7 @@ class TaskToolMixin:
 
             git_revision = resolve_git_revision(cwd=options.cwd)
             retry_count = 0
+            remote_execution_id = uuid.uuid4().hex
             while True:
                 request = RemoteTaskRequest(
                     parent_session_id=session_id,
@@ -336,19 +396,25 @@ class TaskToolMixin:
                     cwd=options.cwd,
                     project_dir=options.project_dir,
                     git_revision=git_revision,
+                    worker_execution_id=remote_execution_id,
                 )
                 try:
                     handle = await dispatcher.dispatch(request)
                 except Exception as exc:  # noqa: BLE001
-                    result = ToolResult(
+                    result, decision = self._task_dispatch_failure_result(
                         tool_use_id=tool_call.tool_use_id,
-                        output=None,
-                        is_error=True,
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                        parent_tool_use_id=self._parent_tool_use_id,
-                        agent_name=self._agent_name,
+                        agent=agent,
+                        dispatch_mode="k3s",
+                        git_revision=git_revision,
+                        target_node=definition.executor.node_name,
+                        execution_id=remote_execution_id,
+                        exc=exc,
+                        supervisor_policy=supervisor_policy,
+                        retry_count=retry_count,
                     )
+                    if decision.action == "retry":
+                        retry_count += 1
+                        continue
                     store.append_event(session_id, result)
                     yield result
                     return

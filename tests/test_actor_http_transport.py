@@ -21,6 +21,7 @@ class TestActorHttpTransport(unittest.IsolatedAsyncioTestCase):
         first_sent = threading.Event()
         abort_called = threading.Event()
         abort_bodies: list[dict[str, object]] = []
+        close_bodies: list[dict[str, object]] = []
         send_bodies: list[dict[str, object]] = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -86,6 +87,15 @@ class TestActorHttpTransport(unittest.IsolatedAsyncioTestCase):
                     self.end_headers()
                     return
 
+                if self.path == "/close":
+                    length = int(self.headers.get("Content-Length") or "0")
+                    payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                    if isinstance(payload, dict):
+                        close_bodies.append(payload)
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+
                 self.send_response(404)
                 self.end_headers()
 
@@ -135,6 +145,9 @@ class TestActorHttpTransport(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(abort_bodies)
         self.assertEqual(abort_bodies[0]["execution_id"], "exec-http-1")
         self.assertEqual(abort_bodies[0]["kind"], "abort")
+        self.assertTrue(close_bodies)
+        self.assertEqual(close_bodies[0]["execution_id"], "exec-http-1")
+        self.assertEqual(close_bodies[0]["kind"], "close")
         self.assertEqual(rest[-1].kind, "down")
         self.assertEqual(down.reason_kind, "aborted")
         child_event = event_from_dict(first.payload["event"])

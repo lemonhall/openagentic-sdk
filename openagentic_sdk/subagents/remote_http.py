@@ -41,6 +41,8 @@ class _ServerExecutionState:
     ack_heads: dict[str, int] = field(default_factory=dict)
     done: bool = False
     saw_down: bool = False
+    close_requested: bool = False
+    close_finalized: bool = False
     error: Exception | None = None
     condition: threading.Condition = field(default_factory=threading.Condition)
 
@@ -63,6 +65,20 @@ class _ServerExecutionState:
             if acked_seq > current:
                 self.ack_heads[mailbox] = acked_seq
 
+    def request_close(self) -> bool:
+        with self.condition:
+            already_requested = self.close_requested
+            self.close_requested = True
+            self.condition.notify_all()
+            return not already_requested
+
+    def begin_close_finalization(self) -> bool:
+        with self.condition:
+            if self.close_finalized:
+                return False
+            self.close_finalized = True
+            return True
+
 
 class HttpRemoteActorTransport:
     def __init__(self, *, base_url: str, timeout_s: float = 60.0) -> None:
@@ -82,6 +98,7 @@ class HttpRemoteActorTransport:
         _disable_response_read_timeout(response)
         execution_id = worker_execution_id or child_session_id
         acked_heads: dict[str, int] = {}
+        close_sent = False
 
         async def _envelopes():
             seen_message_ids: set[str] = set()
@@ -151,7 +168,18 @@ class HttpRemoteActorTransport:
             acked_heads[mailbox] = acked_seq
 
         async def _close() -> None:
-            return None
+            nonlocal close_sent
+            if close_sent:
+                return
+            await self._open_json_post(
+                path="/close",
+                payload={
+                    "execution_id": execution_id,
+                    "kind": "close",
+                },
+                expect_json=False,
+            )
+            close_sent = True
 
         return request.make_handle(
             child_session_id=child_session_id,
@@ -299,6 +327,16 @@ class RemoteTaskHttpWorkerServer:
             with execution_states_lock:
                 execution_states[state.execution_id] = state
 
+        def _unregister_state(execution_id: str) -> None:
+            with execution_states_lock:
+                execution_states.pop(execution_id, None)
+
+        def _finalize_close(state: _ServerExecutionState) -> None:
+            try:
+                asyncio.run(state.handle.close())
+            finally:
+                _unregister_state(state.execution_id)
+
         def _start_execution(request: RemoteTaskRequest, *, slots: threading.BoundedSemaphore) -> _ServerExecutionState:
             handle = asyncio.run(worker.dispatch(request))
             execution_id = handle.execution_id or request.worker_execution_id or uuid.uuid4().hex
@@ -333,6 +371,8 @@ class RemoteTaskHttpWorkerServer:
                         state.append(_down_envelope_from_down(down=down, seq=len(state.envelopes) + 1))
                 finally:
                     state.mark_done(error=error)
+                    if state.close_requested and state.begin_close_finalization():
+                        _finalize_close(state)
                     slots.release()
 
             threading.Thread(target=_pump, name=f"oa-remote-actor-{execution_id}", daemon=True).start()
@@ -443,6 +483,30 @@ class RemoteTaskHttpWorkerServer:
                         return
                     asyncio.run(state.handle.abort())
                     _write_json(self, 202, {"ok": True, "execution_id": execution_id})
+                    return
+
+                if self.path == "/close":
+                    body = _read_json(self)
+                    if body is None:
+                        return
+                    execution_id = str(body.get("execution_id") or "")
+                    state = _lookup_state(execution_id)
+                    if state is None:
+                        _write_json(self, 202, {"ok": True, "execution_id": execution_id, "already_closed": True})
+                        return
+                    first_request = state.request_close()
+                    if state.done and state.begin_close_finalization():
+                        _finalize_close(state)
+                    _write_json(
+                        self,
+                        202,
+                        {
+                            "ok": True,
+                            "execution_id": execution_id,
+                            "close_requested": True,
+                            "first_request": first_request,
+                        },
+                    )
                     return
 
                 if self.path != "/dispatch":

@@ -24,6 +24,10 @@ class TestActorRemoteReplay(unittest.IsolatedAsyncioTestCase):
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802
+                if self.path == "/close":
+                    self.send_response(202)
+                    self.end_headers()
+                    return
                 if self.path == "/send":
                     length = int(self.headers.get("Content-Length") or "0")
                     payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))

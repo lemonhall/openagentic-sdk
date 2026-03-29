@@ -68,6 +68,7 @@
 - Create: `tests/test_k3d_dispatcher.py`
 - Create: `e2e_k3d_tests/e2e_remote_actor_basic.py`
 - Create: `e2e_k3d_tests/e2e_remote_actor_reconnect.py`
+- Create: `e2e_k3d_tests/e2e_remote_actor_host_reconnect.py`
 
 ## Test Contract
 
@@ -144,9 +145,9 @@
   - `python -m unittest -q`
   - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
 - k3d e2e status:
-  - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect`
+  - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect e2e_k3d_tests.e2e_remote_actor_host_reconnect`
   - Result in current shell: skipped (`missing required tool: docker`)
 - Remaining gaps vs broader v57 intent:
   - 当前 replay/ACK 合同只覆盖 `child_events` 单 mailbox，不扩展到多 mailbox cursor
   - docker-enabled 环境下的 k3d M3 e2e 仍待实跑
-- Status: implemented locally as current M3 slice；显式 ACK、mailbox replay、host `Task` 自动 reconnect 本地验证已补齐，待 docker-enabled 环境实跑
+- Status: implemented locally as current M3 slice；显式 ACK、mailbox replay、host `Task` 自动 reconnect 的本地验证与 k3d e2e 用例已补齐，待 docker-enabled 环境实跑

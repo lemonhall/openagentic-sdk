@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
+from urllib import request as urllib_request
 
 from openagentic_sdk.events import AssistantMessage, Result
 from openagentic_sdk.options import (
@@ -74,6 +75,217 @@ class FailingBaseProvider:
 
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
+    async def test_http_remote_worker_server_forwards_close_to_child_handle(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteActorTransport, RemoteTaskHttpWorkerServer
+
+        close_event = threading.Event()
+
+        class ClosableRemoteTaskWorker:
+            def __init__(self, *, base_options, session_store) -> None:
+                _ = (base_options, session_store)
+
+            async def dispatch(self, request):
+                async def _envelopes():
+                    yield ActorEnvelope(
+                        protocol_version="v1",
+                        message_id="msg-close-down",
+                        execution_id="exec-close-1",
+                        sender_actor_id="worker_remote/exec-close-1",
+                        recipient_actor_id="host",
+                        mailbox="child_events",
+                        seq=1,
+                        kind="down",
+                        payload=ActorDownEvent(
+                            execution_id="exec-close-1",
+                            actor_id="worker_remote/exec-close-1",
+                            reason_kind="normal",
+                            reason_detail="stop_reason=end",
+                            final_state="exited",
+                            dispatch_mode="k3s",
+                            child_session_id="d" * 32,
+                            target_node=request.definition.executor.node_name or "",
+                            worker_execution_id="exec-close-1",
+                        ).to_payload(),
+                        ts=1.0,
+                    )
+
+                async def _close() -> None:
+                    close_event.set()
+
+                return request.make_handle(
+                    child_session_id="d" * 32,
+                    target_node=request.definition.executor.node_name or "",
+                    git_revision=request.git_revision,
+                    worker_execution_id="exec-close-1",
+                    envelopes=_envelopes(),
+                    closer=_close,
+                )
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            definition = AgentDefinition(
+                description="remote child",
+                prompt="REMOTE_HTTP_DEF: follow instructions",
+                tools=("Read",),
+                executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                workspace=AgentWorkspaceDefinition(mode="readonly"),
+            )
+            base_options = OpenAgenticOptions(
+                provider=HttpWorkerChildProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(repo_root),
+                project_dir=str(repo_root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={"worker_remote": definition},
+            )
+            with mock.patch("openagentic_sdk.subagents.remote_http.InProcessRemoteTaskWorker", ClosableRemoteTaskWorker):
+                worker_server = RemoteTaskHttpWorkerServer(
+                    base_options=base_options,
+                    session_store=store,
+                    repo_root=str(repo_root),
+                    node_name="node-http",
+                    host="127.0.0.1",
+                    port=0,
+                )
+                httpd = worker_server.make_server()
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    transport = HttpRemoteActorTransport(base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
+                    request = RemoteTaskRequest(
+                        parent_session_id="d" * 32,
+                        parent_tool_use_id="call_task",
+                        agent_name="worker_remote",
+                        prompt="Do remote child work",
+                        definition=definition,
+                        cwd=str(repo_root),
+                        project_dir=str(repo_root),
+                        git_revision=git_revision,
+                    )
+
+                    handle = await transport.spawn(request)
+                    _ = [event async for event in handle.events]
+                    await asyncio.wait_for(handle.down_future, timeout=1.0)
+                    await transport.close(handle)
+                finally:
+                    httpd.shutdown()
+                    httpd.server_close()
+                    thread.join(timeout=5.0)
+
+        self.assertTrue(close_event.wait(timeout=1.0))
+
+    async def test_http_remote_worker_stream_defaults_to_child_events_when_mailbox_is_omitted(self) -> None:
+        from openagentic_sdk.subagents.remote_http import RemoteTaskHttpWorkerServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            definition = AgentDefinition(
+                description="remote child",
+                prompt="REMOTE_HTTP_DEF: follow instructions",
+                tools=("Read",),
+                executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                workspace=AgentWorkspaceDefinition(mode="readonly"),
+            )
+            base_options = OpenAgenticOptions(
+                provider=HttpWorkerChildProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(repo_root),
+                project_dir=str(repo_root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={"worker_remote": definition},
+            )
+            worker_server = RemoteTaskHttpWorkerServer(
+                base_options=base_options,
+                session_store=store,
+                repo_root=str(repo_root),
+                node_name="node-http",
+                host="127.0.0.1",
+                port=0,
+            )
+            httpd = worker_server.make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                dispatch_request = urllib_request.Request(
+                    url=f"http://127.0.0.1:{httpd.server_address[1]}/dispatch",
+                    data=json.dumps(
+                        {
+                            "parent_session_id": "a" * 32,
+                            "parent_tool_use_id": "call_task",
+                            "agent_name": "worker_remote",
+                            "prompt": "Do remote child work",
+                            "definition": {
+                                "description": definition.description,
+                                "prompt": definition.prompt,
+                                "tools": list(definition.tools),
+                                "provider_spec": None,
+                                "model": definition.model,
+                                "executor": {
+                                    "kind": definition.executor.kind,
+                                    "node_name": definition.executor.node_name,
+                                },
+                                "workspace": {"mode": definition.workspace.mode},
+                                "worker": {
+                                    "profile": definition.worker.profile,
+                                    "image": definition.worker.image,
+                                    "max_concurrent_tasks": definition.worker.max_concurrent_tasks,
+                                    "supervisor_policy": definition.worker.supervisor_policy,
+                                },
+                            },
+                            "cwd": str(repo_root),
+                            "project_dir": str(repo_root),
+                            "git_revision": git_revision,
+                            "worker_execution_id": "exec-default-mailbox",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                dispatch_response = urllib_request.urlopen(dispatch_request, timeout=10.0)
+                try:
+                    execution_id = dispatch_response.headers.get("X-OA-Execution-ID") or ""
+                    self.assertTrue(execution_id)
+                    first = self._read_envelope_line(dispatch_response)
+                finally:
+                    dispatch_response.close()
+
+                replay_response = urllib_request.urlopen(
+                    urllib_request.Request(
+                        url=f"http://127.0.0.1:{httpd.server_address[1]}/stream?execution_id={execution_id}&after_seq={first.seq}",
+                        method="GET",
+                    ),
+                    timeout=10.0,
+                )
+                try:
+                    replayed = self._read_all_envelopes(replay_response)
+                finally:
+                    replay_response.close()
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertTrue(replayed)
+        self.assertTrue(all(envelope.seq > first.seq for envelope in replayed))
+        self.assertEqual(replayed[-1].kind, "down")
+
     async def test_http_remote_worker_server_forwards_control_envelope_to_child_handle(self) -> None:
         from openagentic_sdk.subagents.remote_http import HttpRemoteActorTransport, RemoteTaskHttpWorkerServer
 
@@ -673,6 +885,23 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
                 _ = (format, args)
 
         return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+
+    def _read_envelope_line(self, response) -> ActorEnvelope:  # noqa: ANN001
+        line = response.readline()
+        if not line:
+            raise AssertionError("expected at least one actor envelope")
+        return ActorEnvelope.from_dict(json.loads(line.decode("utf-8")))
+
+    def _read_all_envelopes(self, response) -> list[ActorEnvelope]:  # noqa: ANN001
+        items: list[ActorEnvelope] = []
+        while True:
+            line = response.readline()
+            if not line:
+                return items
+            text = line.decode("utf-8").strip()
+            if not text:
+                continue
+            items.append(ActorEnvelope.from_dict(json.loads(text)))
 
 
 if __name__ == "__main__":

@@ -138,5 +138,6 @@
 - Status:
   - local tracing/unit path 已完成并通过：`python -m unittest -q tests.test_actor_tracing`
   - Collector / Jaeger manifests 已落地：`deploy/k8s/v57/otel-collector.yaml`、`deploy/k8s/v57/jaeger.yaml`
-  - k3d trace smoke 已改成直接 `host -> remote worker` 路径：`e2e_k3d_tests/e2e_remote_actor_trace_smoke.py`
-  - 待实跑：docker-backed k3d trace e2e、Jaeger Web UI 手工验证
+  - cluster-host trace smoke 已切到真实 v56 语义：`port-forward -> cluster chat host -> remote subagent -> Jaeger`
+  - docker-backed k3d trace smoke 已实跑通过：`wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest -v e2e_k3d_tests.e2e_remote_actor_trace_smoke.TestRemoteActorTraceSmoke.test_jaeger_receives_cluster_chat_host_to_remote_subagent_trace"'`
+  - Jaeger Web UI 首页已通过 `kubectl port-forward service/jaeger-query 36686:16686` 验证可打开（HTTP 200）

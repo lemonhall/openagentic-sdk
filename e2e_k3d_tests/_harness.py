@@ -111,10 +111,19 @@ def ensure_tracing_ready() -> None:
         role="worker",
         command=_worker_tracing_command(),
     )
+    _patch_tracing_deployment(
+        deployment=CHAT_HOST_DEPLOYMENT,
+        container_name="host",
+        service_name="oa-cluster-chat-host",
+        node_env_var="OA_HOST_NODE_NAME",
+        role="host",
+        command=_chat_host_tracing_command(),
+    )
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{JAEGER_DEPLOYMENT}", "--timeout=240s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{OTEL_COLLECTOR_DEPLOYMENT}", "--timeout=240s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=240s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_B_DEPLOYMENT}", "--timeout=240s"])
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{CHAT_HOST_DEPLOYMENT}", "--timeout=240s"])
     _TRACING_READY = True
 
 
@@ -321,6 +330,24 @@ def _worker_tracing_command() -> str:
         "--session-root /tmp/openagentic-remote "
         "--provider-factory e2e_k3d_tests._smoke_provider:create_worker_provider "
         "--node-name-env OA_REMOTE_NODE_NAME"
+    )
+
+
+def _chat_host_tracing_command() -> str:
+    return (
+        "set -e; "
+        f"{_python_tracing_bootstrap()}; "
+        "export OTEL_RESOURCE_ATTRIBUTES=\"oa.node.name=${OA_HOST_NODE_NAME},oa.role=host\"; "
+        "python -u -m openagentic_sdk.server.cluster_chat_host "
+        "--host 0.0.0.0 "
+        "--port 8766 "
+        "--repo-root /workspace/repo "
+        "--session-root /tmp/openagentic-cluster-chat "
+        "--provider-factory e2e_k3d_tests._smoke_provider:create_host_provider "
+        "--agents-factory e2e_k3d_tests._smoke_provider:create_cluster_agents "
+        "--host-node-name-env OA_HOST_NODE_NAME "
+        "--node-url k3d-v56-openagentic-agent-0=http://$OA_REMOTE_WORKER_AGENT_0_SERVICE_HOST:8765 "
+        "--node-url k3d-v56-openagentic-agent-1=http://$OA_REMOTE_WORKER_AGENT_1_SERVICE_HOST:8765"
     )
 
 

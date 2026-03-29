@@ -22,6 +22,7 @@ from ..remote_cluster_config import (
 )
 from ..serialization import event_to_dict
 from ..sessions.store import FileSessionStore
+from ..subagents.actor_tracing import ActorTracing
 from ..subagents.git_sync import CommittedGitSynchronizer, GitSyncResult
 from ..subagents.remote_http import HttpRemoteTaskDispatcher
 from ..subagents.session_meta import build_authoritative_session_metadata, try_resolve_git_revision
@@ -309,6 +310,12 @@ class StaticNodeHttpRemoteTaskDispatcher:
             node_name: HttpRemoteTaskDispatcher(base_url=base_url, timeout_s=timeout_s)
             for node_name, base_url in node_urls.items()
         }
+
+    def bind_actor_tracing(self, tracing: ActorTracing) -> None:
+        for dispatcher in self._dispatchers.values():
+            bind_actor_tracing = getattr(dispatcher, "bind_actor_tracing", None)
+            if callable(bind_actor_tracing):
+                bind_actor_tracing(tracing)
 
     async def dispatch(self, request):
         node_name = request.definition.executor.node_name or ""

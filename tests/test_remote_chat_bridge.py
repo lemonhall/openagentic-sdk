@@ -438,6 +438,34 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["config_source"], str(root / "openagentic.remote.json"))
         self.assertEqual(payload["host_node_name"], "node-host")
 
+    async def test_cluster_chat_host_dispatcher_propagates_actor_tracing_to_node_dispatchers(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import StaticNodeHttpRemoteTaskDispatcher
+
+        tracing = mock.sentinel.actor_tracing
+
+        class FakeHttpRemoteTaskDispatcher:
+            def __init__(self, *, base_url: str, timeout_s: float) -> None:
+                self.base_url = base_url
+                self.timeout_s = timeout_s
+                self.bound_tracing = None
+
+            def bind_actor_tracing(self, value) -> None:  # noqa: ANN001
+                self.bound_tracing = value
+
+        with mock.patch("openagentic_sdk.server.cluster_chat_host.HttpRemoteTaskDispatcher", FakeHttpRemoteTaskDispatcher):
+            dispatcher = StaticNodeHttpRemoteTaskDispatcher(
+                node_urls={
+                    "node-a": "http://node-a.example.test:8765",
+                    "node-b": "http://node-b.example.test:8765",
+                }
+            )
+
+        dispatcher.bind_actor_tracing(tracing)
+
+        child_dispatchers = dispatcher._dispatchers
+        self.assertEqual(set(child_dispatchers), {"node-a", "node-b"})
+        self.assertTrue(all(child.bound_tracing is tracing for child in child_dispatchers.values()))
+
     async def test_remote_worker_health_reports_provider_status_from_remote_config(self) -> None:
         from openagentic_sdk.subagents.remote_http import RemoteTaskHttpWorkerServer
         from openagentic_sdk.subagents.remote_http_worker_server import build_remote_http_worker_from_remote_config

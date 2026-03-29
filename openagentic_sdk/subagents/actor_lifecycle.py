@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Literal
+
+from ..events import Result
+
+ActorDownReasonKind = Literal["normal", "child_exit_error", "transport_lost", "remote_worker_error", "aborted"]
+ActorDownFinalState = Literal["exited", "failed", "aborted"]
+
+
+@dataclass(frozen=True, slots=True)
+class ActorDownEvent:
+    execution_id: str
+    actor_id: str
+    reason_kind: ActorDownReasonKind
+    final_state: ActorDownFinalState
+    dispatch_mode: str
+    reason_detail: str | None = None
+    child_session_id: str | None = None
+    target_node: str | None = None
+    worker_execution_id: str | None = None
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if isinstance(value, str) and value
+        }
+
+
+def classify_child_result_down(
+    *,
+    execution_id: str,
+    actor_id: str,
+    dispatch_mode: str,
+    result: Result | None,
+    child_session_id: str | None = None,
+    target_node: str | None = None,
+    worker_execution_id: str | None = None,
+) -> ActorDownEvent:
+    if result is None:
+        return ActorDownEvent(
+            execution_id=execution_id,
+            actor_id=actor_id,
+            reason_kind="normal",
+            reason_detail="stream_closed_without_result",
+            final_state="exited",
+            dispatch_mode=dispatch_mode,
+            child_session_id=child_session_id,
+            target_node=target_node,
+            worker_execution_id=worker_execution_id,
+        )
+
+    stop_reason = result.stop_reason or ("end" if result.final_text.strip() else "missing_result")
+    reason_detail = f"stop_reason={stop_reason}"
+    if stop_reason == "interrupted":
+        return ActorDownEvent(
+            execution_id=execution_id,
+            actor_id=actor_id,
+            reason_kind="aborted",
+            reason_detail=reason_detail,
+            final_state="aborted",
+            dispatch_mode=dispatch_mode,
+            child_session_id=child_session_id,
+            target_node=target_node,
+            worker_execution_id=worker_execution_id,
+        )
+    if stop_reason != "end" or not result.final_text.strip():
+        return ActorDownEvent(
+            execution_id=execution_id,
+            actor_id=actor_id,
+            reason_kind="child_exit_error",
+            reason_detail=reason_detail,
+            final_state="failed",
+            dispatch_mode=dispatch_mode,
+            child_session_id=child_session_id,
+            target_node=target_node,
+            worker_execution_id=worker_execution_id,
+        )
+    return ActorDownEvent(
+        execution_id=execution_id,
+        actor_id=actor_id,
+        reason_kind="normal",
+        reason_detail=reason_detail,
+        final_state="exited",
+        dispatch_mode=dispatch_mode,
+        child_session_id=child_session_id,
+        target_node=target_node,
+        worker_execution_id=worker_execution_id,
+    )
+
+
+def aborted_down(
+    *,
+    execution_id: str,
+    actor_id: str,
+    dispatch_mode: str,
+    child_session_id: str | None = None,
+    target_node: str | None = None,
+    worker_execution_id: str | None = None,
+    reason_detail: str = "host_abort",
+) -> ActorDownEvent:
+    return ActorDownEvent(
+        execution_id=execution_id,
+        actor_id=actor_id,
+        reason_kind="aborted",
+        reason_detail=reason_detail,
+        final_state="aborted",
+        dispatch_mode=dispatch_mode,
+        child_session_id=child_session_id,
+        target_node=target_node,
+        worker_execution_id=worker_execution_id,
+    )
+
+
+def exception_down(
+    *,
+    execution_id: str,
+    actor_id: str,
+    dispatch_mode: str,
+    reason_kind: ActorDownReasonKind,
+    exc: BaseException,
+    child_session_id: str | None = None,
+    target_node: str | None = None,
+    worker_execution_id: str | None = None,
+) -> ActorDownEvent:
+    final_state: ActorDownFinalState = "aborted" if reason_kind == "aborted" else "failed"
+    return ActorDownEvent(
+        execution_id=execution_id,
+        actor_id=actor_id,
+        reason_kind=reason_kind,
+        reason_detail=f"{type(exc).__name__}: {exc}",
+        final_state=final_state,
+        dispatch_mode=dispatch_mode,
+        child_session_id=child_session_id,
+        target_node=target_node,
+        worker_execution_id=worker_execution_id,
+    )
+
+
+def classify_remote_exception_down(
+    *,
+    execution_id: str,
+    actor_id: str,
+    dispatch_mode: str,
+    exc: BaseException,
+    child_session_id: str | None = None,
+    target_node: str | None = None,
+    worker_execution_id: str | None = None,
+) -> ActorDownEvent:
+    message = str(exc)
+    if isinstance(exc, RuntimeError) and message.startswith("Remote task worker stream failed"):
+        reason_kind: ActorDownReasonKind = "remote_worker_error"
+    elif isinstance(exc, (ConnectionError, OSError, TimeoutError)):
+        reason_kind = "transport_lost"
+    else:
+        reason_kind = "remote_worker_error"
+    return exception_down(
+        execution_id=execution_id,
+        actor_id=actor_id,
+        dispatch_mode=dispatch_mode,
+        reason_kind=reason_kind,
+        exc=exc,
+        child_session_id=child_session_id,
+        target_node=target_node,
+        worker_execution_id=worker_execution_id,
+    )

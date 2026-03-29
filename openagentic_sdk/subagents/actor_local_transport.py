@@ -7,7 +7,9 @@ import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator
 
+from ..events import Result
 from ..serialization import event_to_dict
+from .actor_lifecycle import classify_child_result_down, exception_down
 from .actor_mailbox import ActorMailboxStore
 from .actor_protocol import ActorEnvelope
 from .actor_registry import ActorExecutionRegistry
@@ -36,10 +38,12 @@ class LocalActorTransport:
             dispatch_mode="local",
         )
         self._registry.update_state(spec.execution_id, "running")
+        down_future: asyncio.Future = asyncio.get_running_loop().create_future()
         handle = ActorExecutionHandle(
             execution_id=spec.execution_id,
             actor_id=spec.child_actor_id,
             child_session_id=spec.child_session_id,
+            down_future=down_future,
             event_mailbox=spec.event_mailbox,
             control_mailbox=spec.control_mailbox,
         )
@@ -75,7 +79,6 @@ class LocalActorTransport:
         state.task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await state.task
-        self._registry.update_state(handle.execution_id, "aborted")
 
     async def close(self, handle: ActorExecutionHandle) -> None:
         state = self._executions.get(handle.execution_id)
@@ -94,11 +97,14 @@ class LocalActorTransport:
         queue: asyncio.Queue[ActorEnvelope | object],
         control_queue: asyncio.Queue[ActorEnvelope | object],
     ) -> None:
+        last_result: Result | None = None
         try:
             stream = spec.run(self._control_stream(control_queue))
             if inspect.isawaitable(stream):
                 stream = await stream
             async for event in stream:
+                if isinstance(event, Result):
+                    last_result = event
                 envelope = ActorEnvelope(
                     protocol_version="v1",
                     message_id=uuid.uuid4().hex,
@@ -119,12 +125,41 @@ class LocalActorTransport:
                     seq=self._mailbox_store.head_seq(spec.execution_id, spec.event_mailbox),
                 )
                 await queue.put(envelope)
-            self._registry.update_state(spec.execution_id, "exited")
+            self._record_down(
+                spec.execution_id,
+                classify_child_result_down(
+                    execution_id=spec.execution_id,
+                    actor_id=spec.child_actor_id,
+                    dispatch_mode=spec.dispatch_mode,
+                    result=last_result,
+                    child_session_id=spec.child_session_id,
+                ),
+            )
         except asyncio.CancelledError:
-            self._registry.update_state(spec.execution_id, "aborted")
+            self._record_down(
+                spec.execution_id,
+                exception_down(
+                    execution_id=spec.execution_id,
+                    actor_id=spec.child_actor_id,
+                    dispatch_mode=spec.dispatch_mode,
+                    reason_kind="aborted",
+                    exc=asyncio.CancelledError(),
+                    child_session_id=spec.child_session_id,
+                ),
+            )
             raise
-        except Exception:
-            self._registry.update_state(spec.execution_id, "failed")
+        except Exception as exc:  # noqa: BLE001
+            self._record_down(
+                spec.execution_id,
+                exception_down(
+                    execution_id=spec.execution_id,
+                    actor_id=spec.child_actor_id,
+                    dispatch_mode=spec.dispatch_mode,
+                    reason_kind="child_exit_error",
+                    exc=exc,
+                    child_session_id=spec.child_session_id,
+                ),
+            )
         finally:
             await queue.put(self._done_sentinel)
             await control_queue.put(self._done_sentinel)
@@ -145,3 +180,11 @@ class LocalActorTransport:
             if item is self._done_sentinel:
                 break
             yield item
+
+    def _record_down(self, execution_id: str, down) -> None:  # noqa: ANN001
+        record = self._registry.record_down(execution_id, down)
+        state = self._executions.get(execution_id)
+        if state is None:
+            return
+        if not state.handle.down_future.done():
+            state.handle.down_future.set_result(record.last_down)

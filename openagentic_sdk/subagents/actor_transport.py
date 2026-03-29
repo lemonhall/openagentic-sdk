@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 
+from .actor_lifecycle import ActorDownEvent
 from .actor_protocol import ActorEnvelope
 
 
@@ -11,6 +13,7 @@ class ActorExecutionHandle:
     execution_id: str
     actor_id: str
     child_session_id: str | None
+    down_future: asyncio.Future[ActorDownEvent]
     event_mailbox: str = "child_events"
     control_mailbox: str = "control"
 

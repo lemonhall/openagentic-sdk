@@ -98,6 +98,53 @@ class NoOutputRemoteDispatcher:
         )
 
 
+class FlakyTransportRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+        attempt = len(self.requests)
+
+        async def _events():
+            if attempt == 1:
+                raise ConnectionResetError("socket reset by peer")
+            yield Result(
+                final_text="remote child done after retry",
+                session_id="d" * 32,
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+
+        return request.make_handle(
+            child_session_id="d" * 32,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id=f"exec-retry-{attempt}",
+            events=_events(),
+        )
+
+
+class RemoteWorkerErrorDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+
+        async def _events():
+            raise RuntimeError("Remote task worker stream failed (ValueError): bad parse")
+            yield  # pragma: no cover
+
+        return request.make_handle(
+            child_session_id="e" * 32,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id="exec-worker-error",
+            events=_events(),
+        )
+
+
 class RemoteTaskNoOutputProvider:
     name = "fake-no-output"
 
@@ -235,7 +282,94 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task_result.output["dispatch_mode"], "k3s")
         self.assertEqual(task_result.output["target_node"], "node-a")
         self.assertEqual(task_result.output["child_stop_reason"], "no_output")
+        self.assertEqual(task_result.output["down"]["reason_kind"], "child_exit_error")
         self.assertEqual(getattr(events[-1], "final_text", None), "parent remote saw task failure")
+
+    async def test_k3s_agent_retries_once_on_transport_loss(self) -> None:
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = FlakyTransportRemoteDispatcher()
+
+            options = OpenAgenticOptions(
+                provider=RemoteTaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311", supervisor_policy="retry_once_on_transport_loss"),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for e in openagentic_sdk.query(prompt="PARENT_REMOTE: delegate", options=options):
+                events.append(e)
+
+        self.assertEqual(len(dispatcher.requests), 2)
+        task_result = next(
+            event for event in events if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+        )
+        self.assertFalse(task_result.is_error)
+        self.assertEqual(task_result.output["final_text"], "remote child done after retry")
+
+    async def test_k3s_agent_does_not_retry_remote_worker_error_as_transport_loss(self) -> None:
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = RemoteWorkerErrorDispatcher()
+
+            options = OpenAgenticOptions(
+                provider=RemoteTaskNoOutputProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311", supervisor_policy="retry_once_on_transport_loss"),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for e in openagentic_sdk.query(prompt="PARENT_REMOTE_NO_OUTPUT: delegate", options=options):
+                events.append(e)
+
+        self.assertEqual(len(dispatcher.requests), 1)
+        task_result = next(
+            event for event in events if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+        )
+        self.assertTrue(task_result.is_error)
+        self.assertEqual(task_result.output["down"]["reason_kind"], "remote_worker_error")
 
     def _init_git_repo(self, root: Path) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)

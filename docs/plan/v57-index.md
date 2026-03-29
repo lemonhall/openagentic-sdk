@@ -25,7 +25,7 @@ v57 的目标不是“把所有远程通信都重写成 actor 系统”，而是
   - PRD: `docs/prd/PRD-0057-host-subagent-actor-protocol-v57.md`
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_actor_supervision tests.test_actor_local_transport tests.test_subagent_task tests.test_remote_task_dispatch`
-  - Status: planned
+  - Status: done（verified locally 2026-03-29）
 
 - **M3: HTTP Actor Transport Adapter**
   - Plan: `docs/plan/v57-host-subagent-http-transport-adapter.md`
@@ -55,11 +55,11 @@ v57 的目标不是“把所有远程通信都重写成 actor 系统”，而是
 - REQ-0057-001 → `docs/plan/v57-host-subagent-actor-protocol-foundation.md` → `tests.test_actor_protocol` → executed locally 2026-03-29
 - REQ-0057-002 → `docs/plan/v57-host-subagent-actor-protocol-foundation.md` → `tests.test_actor_mailbox_store` + `tests.test_actor_local_transport` → executed locally 2026-03-29
 - REQ-0057-003 → `docs/plan/v57-host-subagent-actor-protocol-foundation.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_local_transport` + `tests.test_actor_http_transport` → M1 local portion executed；HTTP portion pending
-- REQ-0057-004 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` → `tests.test_actor_supervision` → planned；not yet executed
-- REQ-0057-005 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` → `tests.test_actor_supervision` + `tests.test_remote_task_dispatch` → planned；not yet executed
+- REQ-0057-004 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` → `tests.test_actor_supervision` → executed locally 2026-03-29
+- REQ-0057-005 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` → `tests.test_actor_supervision` + `tests.test_remote_task_dispatch` → executed locally 2026-03-29
 - REQ-0057-006 → `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_remote_replay` + `tests.test_actor_http_transport` → planned；not yet executed
 - REQ-0057-007 → `docs/plan/v57-host-subagent-actor-protocol-foundation.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_subagent_task` + `tests.test_remote_task_dispatch` + `tests.test_remote_http_transport` → planned；not yet executed
-- REQ-0057-008 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_supervision` + `tests.test_actor_http_transport` → planned；not yet executed
+- REQ-0057-008 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_supervision` + `tests.test_actor_http_transport` → M2 local supervision 已执行；HTTP adapter portion pending
 - REQ-0057-011 → `docs/plan/v57-host-subagent-tracing-jaeger.md` → `tests.test_actor_tracing` + `e2e_k3d_tests/e2e_remote_actor_trace_*.py` → planned；not yet executed
 - REQ-0057-009 → 全部 v57 计划 → `tests.test_actor_*` + `e2e_k3d_tests/e2e_remote_actor_*.py` → planned；not yet executed
 - REQ-0057-010 → `docs/plan/v57-index.md` + 全部 v57 计划 → 文档边界审阅 + code review gate → planned；not yet executed
@@ -74,4 +74,4 @@ v57 的目标不是“把所有远程通信都重写成 actor 系统”，而是
 - 当前 reality：local 与 remote transport 仍是两条不同语义链；统一抽象层缺失。
 - 当前 reality：还没有一套正式纳入 v57 的轻量 tracing 栈；host → subagent trace 暂时不可在 Web UI 中观察。
 - 当前 reality：cluster chat bridge 已可用，但它不在 v57 actor 改造范围内，必须显式排除。
-- 当前 progress：M1 actor foundation 已完成本地验证；M2/M3/M4 仍待执行。
+- 当前 progress：M1/M2 已完成本地验证；M3/M4 仍待执行。

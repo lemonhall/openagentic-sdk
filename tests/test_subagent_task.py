@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -58,6 +60,42 @@ class TaskNoOutputProvider:
 
         if isinstance(user_text, str) and user_text.startswith("CHILD_EMPTY:"):
             return ModelOutput(assistant_text=None, tool_calls=[], usage=None, raw=None)
+
+        if any(m.get("role") == "tool" for m in messages):
+            tool_payload = next((m.get("content") for m in reversed(messages) if m.get("role") == "tool"), "")
+            tool_obj = json.loads(tool_payload) if isinstance(tool_payload, str) and tool_payload else {}
+            if isinstance(tool_obj, dict) and tool_obj.get("is_error") is True:
+                return ModelOutput(assistant_text="parent saw task failure", tool_calls=[], usage=None, raw=None)
+            return ModelOutput(assistant_text="parent unexpectedly saw success", tool_calls=[], usage=None, raw=None)
+
+        return ModelOutput(assistant_text="unexpected", tool_calls=[], usage=None, raw=None)
+
+
+class TaskAbortProvider:
+    name = "fake-abort"
+
+    def __init__(self, *, child_started, child_release):  # noqa: ANN001
+        self.child_started = child_started
+        self.child_release = child_release
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = tools
+        _ = api_key
+        user_text = next((m.get("content") for m in messages if m.get("role") == "user"), "")
+
+        if isinstance(user_text, str) and user_text.startswith("PARENT_ABORT:") and not any(m.get("role") == "tool" for m in messages):
+            return ModelOutput(
+                assistant_text=None,
+                tool_calls=[ToolCall(tool_use_id="call_task", name="Task", arguments={"agent": "worker", "prompt": "Do child work"})],
+                usage=None,
+                raw=None,
+            )
+
+        if isinstance(user_text, str) and user_text.startswith("CHILD_BLOCK:"):
+            self.child_started.set()
+            await self.child_release.wait()
+            return ModelOutput(assistant_text="child should have been aborted", tool_calls=[], usage=None, raw=None)
 
         if any(m.get("role") == "tool" for m in messages):
             tool_payload = next((m.get("content") for m in reversed(messages) if m.get("role") == "tool"), "")
@@ -340,6 +378,54 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertIs(options.runtime_state.actor_registry, options.runtime_state.runtime.actor_registry)
             self.assertIs(options.runtime_state.actor_mailbox_store, options.runtime_state.runtime.actor_mailbox_store)
             self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "exited")
+
+    async def test_task_surfaces_structured_down_when_host_aborts_child(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+            child_started = asyncio.Event()
+            child_release = asyncio.Event()
+            abort_event = threading.Event()
+
+            options = OpenAgenticOptions(
+                provider=TaskAbortProvider(child_started=child_started, child_release=child_release),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                abort_event=abort_event,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_BLOCK: wait forever",
+                        tools=(),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events: list[object] = []
+
+            async def _run_query() -> None:
+                async for event in openagentic_sdk.query(prompt="PARENT_ABORT: delegate", options=options):
+                    events.append(event)
+
+            task = asyncio.create_task(_run_query())
+            await asyncio.wait_for(child_started.wait(), timeout=1.0)
+            abort_event.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
+            task_result = next(
+                event
+                for event in events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            self.assertTrue(task_result.is_error)
+            self.assertEqual(task_result.output["down"]["reason_kind"], "aborted")
+            self.assertEqual(getattr(events[-1], "final_text", None), "parent saw task failure")
 
 
 if __name__ == "__main__":

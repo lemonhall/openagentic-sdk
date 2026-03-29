@@ -313,6 +313,7 @@ def _definition_to_dict(definition: AgentDefinition) -> dict[str, Any]:
             "profile": definition.worker.profile,
             "image": definition.worker.image,
             "max_concurrent_tasks": definition.worker.max_concurrent_tasks,
+            "supervisor_policy": definition.worker.supervisor_policy,
         },
     }
 
@@ -347,6 +348,11 @@ def _definition_from_dict(raw: Any) -> AgentDefinition:
             profile=(str(worker_obj.get("profile")) if isinstance(worker_obj.get("profile"), str) else None),
             image=(str(worker_obj.get("image")) if isinstance(worker_obj.get("image"), str) else None),
             max_concurrent_tasks=int(worker_obj.get("max_concurrent_tasks") or 3),
+            supervisor_policy=(
+                str(worker_obj.get("supervisor_policy"))
+                if isinstance(worker_obj.get("supervisor_policy"), str)
+                else "fail_parent_tool_use"
+            ),
         ),
     )
 

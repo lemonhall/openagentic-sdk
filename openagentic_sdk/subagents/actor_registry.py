@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .actor_lifecycle import ActorDownEvent
+
 ActorDispatchMode = Literal["local", "k3s"]
 ActorExecutionState = Literal["created", "running", "exited", "failed", "aborted"]
 
@@ -15,6 +17,7 @@ class ActorExecutionRecord:
     state: ActorExecutionState = "created"
     target_node: str | None = None
     worker_execution_id: str | None = None
+    last_down: ActorDownEvent | None = None
     mailbox_heads: dict[str, int] = field(default_factory=dict)
 
 
@@ -59,4 +62,10 @@ class ActorExecutionRegistry:
             raise ValueError("seq must be non-negative")
         record = self.get(execution_id)
         record.mailbox_heads[mailbox] = seq
+        return record
+
+    def record_down(self, execution_id: str, down: ActorDownEvent) -> ActorExecutionRecord:
+        record = self.get(execution_id)
+        record.last_down = down
+        record.state = down.final_state
         return record

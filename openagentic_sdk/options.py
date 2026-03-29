@@ -29,6 +29,7 @@ class AgentWorkerDefinition:
     profile: str | None = None
     image: str | None = None
     max_concurrent_tasks: int = 3
+    supervisor_policy: str = "fail_parent_tool_use"
 
 
 @dataclass(frozen=True, slots=True)

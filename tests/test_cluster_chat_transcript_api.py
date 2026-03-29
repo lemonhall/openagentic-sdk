@@ -68,6 +68,34 @@ class TestClusterChatTranscriptApi(unittest.TestCase):
         self.assertEqual(payload["source"], "host")
         self.assertEqual([m["text"] for m in payload["messages"]], ["hello", "world"])
 
+    def test_host_transcript_route_maps_missing_session_to_not_found(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root / "sessions_home")
+            options = OpenAgenticOptions(
+                provider=_Provider(),
+                model="fake",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, payload = _http_json(f"http://127.0.0.1:{httpd.server_address[1]}/oa/transcript/session/{'f' * 32}")
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"], "not_found")
+
     def test_host_can_proxy_child_transcript_by_target_node(self) -> None:
         from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer, StaticNodeHttpRemoteTaskDispatcher
 
@@ -136,6 +164,133 @@ class TestClusterChatTranscriptApi(unittest.TestCase):
         self.assertEqual(payload["agent_name"], "writer")
         self.assertEqual(payload["source"], "worker")
         self.assertEqual(payload["messages"][0]["text"], "child body")
+
+    def test_host_proxies_child_transcript_via_explicit_dispatcher_contract(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        class DispatcherWithTranscriptProxy:
+            async def dispatch(self, request):  # noqa: ANN001
+                _ = request
+                raise AssertionError("dispatch should not be called for transcript proxy tests")
+
+            def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict]:
+                self.last_call = (target_node, session_id)
+                return (
+                    200,
+                    {
+                        "session_id": session_id,
+                        "agent_name": "research",
+                        "source": "worker",
+                        "messages": [{"role": "assistant", "text": "proxy body"}],
+                    },
+                )
+
+        dispatcher = DispatcherWithTranscriptProxy()
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root / "sessions_home")
+            options = OpenAgenticOptions(
+                provider=_Provider(),
+                model="fake",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, payload = _http_json(
+                    f"http://127.0.0.1:{httpd.server_address[1]}/oa/transcript/child/researchers/{'d' * 32}"
+                )
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(dispatcher.last_call, ("researchers", "d" * 32))
+        self.assertEqual(payload["messages"][0]["text"], "proxy body")
+
+    def test_host_child_proxy_maps_worker_unreachable_error_code(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        class DispatcherWithBrokenTranscriptProxy:
+            async def dispatch(self, request):  # noqa: ANN001
+                _ = request
+                raise AssertionError("dispatch should not be called for transcript proxy tests")
+
+            def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict]:
+                _ = (target_node, session_id)
+                raise ConnectionError("dial tcp timeout")
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root / "sessions_home")
+            options = OpenAgenticOptions(
+                provider=_Provider(),
+                model="fake",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=DispatcherWithBrokenTranscriptProxy(),
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, payload = _http_json(
+                    f"http://127.0.0.1:{httpd.server_address[1]}/oa/transcript/child/researchers/{'e' * 32}"
+                )
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["error"], "worker_unreachable")
+
+    def test_host_child_proxy_without_contract_maps_to_transcript_unavailable(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        class DispatcherWithoutTranscriptProxy:
+            async def dispatch(self, request):  # noqa: ANN001
+                _ = request
+                raise AssertionError("dispatch should not be called for transcript proxy tests")
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root / "sessions_home")
+            options = OpenAgenticOptions(
+                provider=_Provider(),
+                model="fake",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=DispatcherWithoutTranscriptProxy(),
+            )
+            httpd = ClusterChatHostServer(base_options=options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, payload = _http_json(
+                    f"http://127.0.0.1:{httpd.server_address[1]}/oa/transcript/child/researchers/{'a' * 32}"
+                )
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "transcript_unavailable")
 
 
 if __name__ == "__main__":

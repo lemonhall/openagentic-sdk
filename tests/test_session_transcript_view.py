@@ -43,6 +43,41 @@ class TestSessionTranscriptView(unittest.TestCase):
         self.assertEqual(payload["agent_name"], "host")
         self.assertEqual([m["text"] for m in payload["messages"]], ["u", "a"])
 
+    def test_build_session_transcript_uses_events_as_authoritative_source(self) -> None:
+        from openagentic_sdk.server.session_transcript_view import build_session_transcript
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+            sid = store.create_session(metadata={"agent_name": "host"})
+            store.append_event(sid, UserMessage(text="from-events-user"))
+            store.append_event(sid, AssistantMessage(text="from-events-assistant"))
+            transcript_path(root, sid).write_text(
+                '{"seq":1,"ts":1.0,"role":"user","text":"stale-user"}\n'
+                '{"seq":2,"ts":2.0,"role":"assistant","text":"stale-assistant"}\n',
+                encoding="utf-8",
+            )
+
+            payload = build_session_transcript(store=store, session_id=sid, source="host")
+
+        self.assertEqual([m["text"] for m in payload["messages"]], ["from-events-user", "from-events-assistant"])
+
+    def test_build_session_transcript_ignores_corrupt_transcript_jsonl_when_events_are_valid(self) -> None:
+        from openagentic_sdk.server.session_transcript_view import build_session_transcript
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+            sid = store.create_session(metadata={})
+            store.append_event(sid, UserMessage(text="u"))
+            store.append_event(sid, AssistantMessage(text="a"))
+            transcript_path(root, sid).write_text("not-json\n", encoding="utf-8")
+
+            payload = build_session_transcript(store=store, session_id=sid, source="host", default_agent_name="host")
+
+        self.assertEqual(payload["agent_name"], "host")
+        self.assertEqual([m["text"] for m in payload["messages"]], ["u", "a"])
+
 
 if __name__ == "__main__":
     unittest.main()

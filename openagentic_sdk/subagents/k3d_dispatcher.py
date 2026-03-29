@@ -32,6 +32,35 @@ class K3dPortForwardRemoteTaskDispatcher:
     def bind_actor_tracing(self, tracing: ActorTracing) -> None:
         self._tracing = tracing
 
+    def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict[str, object]]:
+        pod_name = self._resolve_worker_pod_name(target_node)
+        local_port = self._pick_free_local_port()
+        proc = subprocess.Popen(
+            [
+                self._kubectl_bin,
+                "-n",
+                self._namespace,
+                "port-forward",
+                f"pod/{pod_name}",
+                f"{local_port}:{self._worker_port}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            self._wait_for_port_forward(proc, local_port)
+            dispatcher_kwargs = {
+                "base_url": f"http://127.0.0.1:{local_port}",
+                "timeout_s": self._http_timeout_s,
+            }
+            if self._tracing is not None:
+                dispatcher_kwargs["tracing"] = self._tracing
+            base_dispatcher = HttpRemoteTaskDispatcher(**dispatcher_kwargs)
+            return base_dispatcher.read_transcript(target_node=target_node, session_id=session_id)
+        finally:
+            self._stop_port_forward(proc)
+
     async def dispatch(self, request):
         node_name = request.definition.executor.node_name or ""
         if not node_name:

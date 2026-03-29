@@ -12,8 +12,6 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 
 from ..options import OpenAgenticOptions
 from ..permissions.gate import PermissionGate
@@ -257,7 +255,7 @@ class ClusterChatHostServer:
                         _write_json(self, 400, {"error": "invalid_session_id"})
                         return
                     except FileNotFoundError:
-                        _write_json(self, 404, {"error": "transcript_not_found"})
+                        _write_json(self, 404, {"error": "not_found"})
                         return
                     except Exception as exc:  # noqa: BLE001
                         _write_json(self, 500, {"error": "transcript_unavailable", "detail": str(exc)})
@@ -269,40 +267,31 @@ class ClusterChatHostServer:
                     target_node = parts[3]
                     session_id = parts[4]
                     dispatcher = options.remote_task_dispatcher
-                    node_base_url = getattr(dispatcher, "node_base_url", None)
-                    if not callable(node_base_url):
-                        _write_json(self, 503, {"error": "transcript_proxy_unavailable"})
+                    read_transcript = getattr(dispatcher, "read_transcript", None)
+                    if not callable(read_transcript):
+                        _write_json(self, 503, {"error": "transcript_unavailable"})
                         return
-                    base_url = node_base_url(target_node)
-                    if not isinstance(base_url, str) or not base_url:
-                        _write_json(self, 404, {"error": "target_node_not_found", "target_node": target_node})
-                        return
-                    worker_url = f"{base_url.rstrip('/')}/oa/transcript/session/{session_id}"
-                    req = urllib_request.Request(worker_url, method="GET")
                     try:
-                        with urllib_request.urlopen(req, timeout=10.0) as resp:  # noqa: S310
-                            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-                            _write_json(self, int(resp.status), payload)
-                            return
-                    except urllib_error.HTTPError as exc:
-                        body = exc.read().decode("utf-8", errors="replace")
-                        try:
-                            payload = json.loads(body)
-                        except json.JSONDecodeError:
-                            payload = {"error": "transcript_proxy_failed", "detail": body}
-                        _write_json(self, int(exc.code), payload)
-                        return
-                    except urllib_error.URLError as exc:
+                        status, payload = read_transcript(target_node=target_node, session_id=session_id)
+                    except ConnectionError as exc:
                         _write_json(
                             self,
                             502,
                             {
-                                "error": "transcript_proxy_failed",
+                                "error": "worker_unreachable",
                                 "target_node": target_node,
-                                "detail": str(exc.reason),
+                                "detail": str(exc),
                             },
                         )
                         return
+                    except Exception as exc:  # noqa: BLE001
+                        _write_json(self, 500, {"error": "transcript_unavailable", "detail": str(exc)})
+                        return
+                    if not isinstance(payload, dict):
+                        _write_json(self, 500, {"error": "transcript_unavailable", "detail": "invalid_transcript_payload"})
+                        return
+                    _write_json(self, int(status), payload)
+                    return
 
                 _write_json(self, 404, {"error": "not_found"})
 
@@ -383,6 +372,12 @@ class StaticNodeHttpRemoteTaskDispatcher:
 
     def node_base_url(self, node_name: str) -> str | None:
         return self._node_urls.get(node_name)
+
+    def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict[str, Any]]:
+        dispatcher = self._dispatchers.get(target_node)
+        if dispatcher is None:
+            raise ConnectionError(f"no remote worker URL configured for node '{target_node}'")
+        return dispatcher.read_transcript(target_node=target_node, session_id=session_id)
 
     async def dispatch(self, request):
         node_name = request.definition.executor.node_name or ""

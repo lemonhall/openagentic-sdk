@@ -334,6 +334,30 @@ class HttpRemoteTaskDispatcher:
             tracing=tracing,
         )
 
+    def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict[str, Any]]:
+        _ = target_node
+        req = urllib_request.Request(
+            url=f"{self._actor_transport._base_url}/oa/transcript/session/{session_id}",
+            method="GET",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=self._actor_transport._timeout_s) as resp:  # noqa: S310
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+                if not isinstance(payload, dict):
+                    raise RuntimeError("remote worker transcript returned non-object JSON")
+                return int(resp.status), payload
+        except urllib_error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError as json_exc:
+                raise RuntimeError("remote worker transcript returned invalid JSON") from json_exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("remote worker transcript returned non-object JSON")
+            return int(exc.code), payload
+        except urllib_error.URLError as exc:
+            raise ConnectionError(str(exc.reason)) from exc
+
     async def dispatch(self, request: RemoteTaskRequest):
         return await self._actor_transport.spawn(request)
 
@@ -506,7 +530,7 @@ class RemoteTaskHttpWorkerServer:
                         _write_json(self, 400, {"error": "invalid_session_id"})
                         return
                     except FileNotFoundError:
-                        _write_json(self, 404, {"error": "transcript_not_found"})
+                        _write_json(self, 404, {"error": "not_found"})
                         return
                     except Exception as exc:  # noqa: BLE001
                         _write_json(self, 500, {"error": "transcript_unavailable", "detail": str(exc)})

@@ -199,6 +199,8 @@ class RemoteTaskRequest:
 class RemoteTaskDispatcher(Protocol):
     async def dispatch(self, request: RemoteTaskRequest) -> RemoteTaskDispatchHandle: ...
 
+    def read_transcript(self, *, target_node: str, session_id: str) -> tuple[int, dict[str, Any]]: ...
+
 
 def _resolve_down(future: asyncio.Future[ActorDownEvent], down: ActorDownEvent) -> None:
     if not future.done():

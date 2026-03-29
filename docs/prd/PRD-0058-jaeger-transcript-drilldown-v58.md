@@ -7,17 +7,19 @@ v58 的目标不是把整段聊天正文塞进 tracing backend，而是在保持
 - trace 中只保留稳定引用信息，例如 `session_id`、`child_session_id`、`execution_id`、`target_node`；
 - 完整聊天正文继续留在各自 agent 的 session store / `events.jsonl` 中，而不是复制进 span attributes；
 - Jaeger 前端通过一段轻量级前端扩展 JS，在用户点击某个 span 时请求 transcript API；
+- Jaeger UI 必须顺手修复当前低对比度、灰字难读的问题，至少保证 trace 详情页里的核心文字可读；
+- 为了稳定改前端，v58 必须把 Jaeger UI 源码纳入本仓库并由 git 跟踪，而不是依赖运行时临时注入不可追溯的补丁；
 - transcript API 由我们自己的集群内服务提供，Jaeger 只是 UI 入口，不是正文存储；
 - v58 第一版优先服务于当前 k3s 本地实验环境，目标是“点开能看”，不是做完整的多租户观测平台。
 
 ## Non-Goals
 
 - v58 不把完整 transcript 直接写入 Jaeger span attributes、span events 或 baggage。
-- v58 不 fork 一套完整 Jaeger 前端工程长期维护。
 - v58 不在本轮引入数据库、对象存储或新的持久化系统来专门存 transcript。
 - v58 不做复杂权限系统、多租户鉴权、跨团队共享访问。
 - v58 不把所有 CLI / bridge / cluster 内部链路都做成全文可视化；第一版只覆盖当前 real cluster 的 host ↔ subagent 会话正文回捞。
 - v58 不改变现有 session 持久化主路径；`events.jsonl` 仍然是真实来源。
+- v58 不追求长期重度魔改 Jaeger 整个产品；只维护本项目实际需要的 UI 源码快照与最小 patch 集。
 
 ## Requirements
 
@@ -96,3 +98,24 @@ v58 的目标不是把整段聊天正文塞进 tracing backend，而是在保持
   必须继续可用。
 - 单机模式如果没有 Jaeger transcript 扩展环境，也不得因此报错或影响对话。
 
+### REQ-0058-009 — Jaeger UI 必须修复当前低对比度与灰字难读问题
+
+- v58 必须修复当前 Jaeger trace 详情页中“关键信息为浅灰色、难以辨认”的可读性问题。
+- 第一版至少必须覆盖：
+  - trace 标题区
+  - service / operation 列表
+  - span 详情中的关键字段标签与正文
+- 修复方式可以是 CSS、主题变量或前端组件 patch，但结果必须满足：
+  - 在默认亮色界面下，核心文本明显可读
+  - 不要求新增完整主题切换功能
+  - 不得把 Jaeger 原生布局破坏到不可用
+
+### REQ-0058-010 — Jaeger UI 源码必须作为仓库内第三方源码被 git 跟踪
+
+- 既然 v58 要改 Jaeger UI 行为与样式，Jaeger UI 源码必须纳入本仓库并由 git 跟踪。
+- 第一版至少应做到：
+  - 在仓库内保留一个明确目录，例如 `third_party/jaeger-ui/`
+  - 记录 upstream 版本、commit 或 release tag
+  - 记录我们自己的 patch 边界与构建入口
+- v58 不允许只靠运行时下载远端源码、临时 patch、或只注入一段无法审计的 JS/CSS。
+- deploy 产物必须可从仓库内源码重复构建出来。

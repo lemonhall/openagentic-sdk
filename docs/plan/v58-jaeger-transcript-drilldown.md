@@ -14,6 +14,8 @@
 - REQ-0058-006
 - REQ-0058-007
 - REQ-0058-008
+- REQ-0058-009
+- REQ-0058-010
 
 ## Scope
 
@@ -22,15 +24,17 @@
 - 在 tracing spans 中补 `oa.session_id` / `oa.child_session_id` / `oa.target_node` 等稳定引用
 - 给 cluster chat host 增加只读 transcript API
 - 给 remote worker 增加只读 transcript API，供 host 代理读取
-- 给 Jaeger Web UI 增加一个轻量 transcript drilldown 前端扩展
+- 给 Jaeger Web UI 增加 transcript drilldown 前端扩展
+- 修复 Jaeger UI 当前低对比度 / 灰字难读问题
+- 把 Jaeger UI 源码 vendoring 到仓库内并纳入 git 跟踪
 - 保持固定 Jaeger URL，不增加新的用户入口命令
 
 不做：
 
 - 不把正文直接写入 Jaeger
-- 不维护 Jaeger 完整前端 fork
 - 不做 transcript 编辑与回写
 - 不在本轮解决多租户、鉴权、审计
+- 不追求大规模改造 Jaeger 全部页面；只改 trace drilldown 与当前明显的可读性问题
 
 ## Recommended Architecture
 
@@ -56,13 +60,16 @@
 
 ### 3. Jaeger UI Extension
 
-- 不建议硬 fork Jaeger 前端源码。
-- 第一版建议通过一个轻量 JS 注入层完成：
-  - 监听 Jaeger span 选中事件
-  - 抽取 `oa.*` 引用字段
+- 既然要同时改交互与样式，第一版直接采用“仓库内 vendored Jaeger UI 源码 + 最小 patch”的方式。
+- 建议目录：
+  - `third_party/jaeger-ui/`
+  - `deploy/k8s/v58/jaeger-ui-*.yaml`
+- patch 范围第一版至少包括：
+  - 监听 span 选中并抽取 `oa.*` 引用字段
   - 请求 transcript API
-  - 在当前 trace 详情页旁边插入一个 transcript panel
-- 如果无法稳定拿到 Jaeger 内部事件，可退一步做 DOM-level hook，但仍然保持“薄注入层”而不是整站重写。
+  - 在当前 trace 详情页旁边插入 transcript panel
+  - 提升 trace 详情页关键文字对比度
+- 必须记录 upstream 版本与本地 patch 边界，避免后续完全失控。
 
 ## Acceptance (DoD)
 
@@ -77,6 +84,7 @@
    - 打开 `http://127.0.0.1:16686`
    - 点开一条 real trace 的 host span，可看到 root transcript
    - 点开一条 real trace 的 worker span，可看到 child transcript 或明确结构化错误
+   - trace 详情页中的标题、service / operation 文本与关键字段不再是“难以辨认的浅灰字”
 3. 回归：
    - 不破坏现有 `oa chat --k3d-real`
    - 不破坏 v57 Jaeger trace 查询
@@ -92,6 +100,9 @@
 - Create: `tests/test_session_transcript_view.py`
 - Create: `tests/test_cluster_chat_transcript_api.py`
 - Create: `tests/test_remote_worker_transcript_api.py`
+- Create: `third_party/jaeger-ui/`
+- Create: `third_party/jaeger-ui/UPSTREAM.md`
+- Create: `tests/test_v58_jaeger_ui_assets.py`
 - Create: `deploy/k8s/v58/jaeger-ui-overlay.yaml`
 - Create: `deploy/k8s/v58/jaeger-ui-proxy.yaml`
 - Create: `docs/plan/v58-index.md`
@@ -110,20 +121,22 @@ DoD：
 
 ### M2 — Jaeger Drilldown UI
 
-- 给 Jaeger 加薄前端扩展
+- 把 Jaeger UI 源码纳入仓库
+- 给 Jaeger 加 transcript drilldown 与对比度修复 patch
 - 点击 span 后在同页渲染 transcript panel
 
 DoD：
 
-- `python -m unittest -q tests.test_actor_tracing tests.test_session_transcript_view tests.test_cluster_chat_transcript_api tests.test_remote_worker_transcript_api`
+- `python -m unittest -q tests.test_actor_tracing tests.test_session_transcript_view tests.test_cluster_chat_transcript_api tests.test_remote_worker_transcript_api tests.test_v58_jaeger_ui_assets`
 - 手工验证：
   - `oa chat --k3d-real`
   - `http://127.0.0.1:16686`
   - 点击 real trace span，能看到 transcript panel
+  - 关键文字对比度明显改善，截图中那类浅灰标题不再难读
 
 ## Notes
 
 - v58 的核心哲学是“trace 里存 ref，正文留在 session store”。
 - Jaeger 仍然只是 trace UI；正文来源仍然是我们自己的 host / worker session store。
+- Jaeger UI 源码会被 vendoring 进仓库，但 patch 必须保持最小、可审计、可回放。
 - 只要这个边界不破，后面无论换 Jaeger、SigNoz 还是别的 UI，都还能复用 transcript API 这一层。
-

@@ -117,6 +117,29 @@ class TestCliTraceRenderer(unittest.TestCase):
         self.assertIn("target_node=k3d-v56-openagentic-agent-1", s)
         self.assertIn("worker_execution_id=exec-123", s)
 
+    def test_task_use_renders_prompt_preview(self) -> None:
+        from openagentic_cli.trace import TraceRenderer
+
+        out = io.StringIO()
+        r = TraceRenderer(stream=out, color=False)
+        r.on_event(ToolUse(tool_use_id="t1", name="Task", input={"agent": "writer", "prompt": "write a short essay"}))
+
+        s = out.getvalue()
+        self.assertIn("[host] Delegate to `writer`", s)
+        self.assertIn("[host] prompt: write a short essay", s)
+
+    def test_task_use_truncates_prompt_preview_after_300_chars(self) -> None:
+        from openagentic_cli.trace import TraceRenderer
+
+        long_prompt = "a" * 305 + "tail"
+        out = io.StringIO()
+        r = TraceRenderer(stream=out, color=False)
+        r.on_event(ToolUse(tool_use_id="t1", name="Task", input={"agent": "writer", "prompt": long_prompt}))
+
+        s = out.getvalue()
+        self.assertIn("[host] prompt: " + ("a" * 300) + "... ...", s)
+        self.assertNotIn("tail", s)
+
     def test_local_task_result_is_marked_as_local(self) -> None:
         from openagentic_cli.trace import TraceRenderer
 

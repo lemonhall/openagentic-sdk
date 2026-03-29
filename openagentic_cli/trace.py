@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, TextIO
 
+_TASK_PROMPT_PREVIEW_CHARS = 300
+
 
 def _event_actor(ev: Any) -> str:
     agent = getattr(ev, "agent_name", None)
@@ -74,6 +76,35 @@ def _summarize_tool_use(name: str, tool_input: Mapping[str, Any] | None) -> str:
             return f"Delegate to `{agent}`"
         return "Task"
     return name
+
+
+def _task_prompt_preview(prompt: str) -> str:
+    normalized = prompt.strip()
+    if not normalized:
+        return ""
+    preview = normalized[:_TASK_PROMPT_PREVIEW_CHARS]
+    if len(normalized) > _TASK_PROMPT_PREVIEW_CHARS:
+        return preview + "... ..."
+    return preview
+
+
+def _summarize_tool_use_details(name: str, tool_input: Mapping[str, Any] | None) -> list[str]:
+    inp = tool_input or {}
+    if name != "Task":
+        return []
+
+    prompt = inp.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return []
+
+    preview = _task_prompt_preview(prompt)
+    if not preview:
+        return []
+
+    lines = preview.splitlines()
+    if len(lines) == 1:
+        return [f"prompt: {lines[0]}"]
+    return ["prompt:", *lines]
 
 
 def _summarize_tool_result(
@@ -233,6 +264,11 @@ class TraceRenderer:
             self._group_count += 1
             summary = _summarize_tool_use(name, tool_input if isinstance(tool_input, dict) else None)
             self.stream.write(prefix + _label_with_actor(ev, summary) + "\n")
+            details = _summarize_tool_use_details(name, tool_input if isinstance(tool_input, dict) else None)
+            for i, detail in enumerate(details):
+                detail_prefix = "    └ " if i == 0 else "      "
+                detail_line = _label_with_actor(ev, detail) if i == 0 else detail
+                self.stream.write(detail_prefix + detail_line + "\n")
             self.stream.flush()
             return
 

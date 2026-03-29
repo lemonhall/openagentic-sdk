@@ -43,8 +43,9 @@
 必须全部满足：
 
 1. `python -m unittest -q tests.test_actor_supervision tests.test_actor_local_transport tests.test_subagent_task tests.test_remote_task_dispatch`
-2. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_supervision.py tests/test_subagent_task.py tests/test_remote_task_dispatch.py --config ruff.toml`
-3. 反作弊条款：
+2. `python -m unittest -q tests.test_cli_trace_renderer`
+3. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py openagentic_cli/trace.py tests/test_actor_supervision.py tests/test_actor_local_transport.py tests/test_subagent_task.py tests/test_remote_task_dispatch.py tests/test_cli_trace_renderer.py --config ruff.toml`
+4. 反作弊条款：
    - 不允许用“看到异常字符串就当 down”替代结构化生命周期事件
    - 不允许 supervisor policy 只存在文档，不进入实际决策路径
 
@@ -52,12 +53,16 @@
 
 - Create: `openagentic_sdk/subagents/actor_supervisor.py`
 - Create: `openagentic_sdk/subagents/actor_lifecycle.py`
+- Modify: `openagentic_sdk/subagents/actor_local_transport.py`
 - Modify: `openagentic_sdk/subagents/actor_registry.py`
 - Modify: `openagentic_sdk/runtime_core/tool_task.py`
 - Modify: `openagentic_sdk/subagents/remote_types.py`
+- Modify: `openagentic_cli/trace.py`
 - Create: `tests/test_actor_supervision.py`
+- Modify: `tests/test_actor_local_transport.py`
 - Modify: `tests/test_subagent_task.py`
 - Modify: `tests/test_remote_task_dispatch.py`
+- Modify: `tests/test_cli_trace_renderer.py`
 
 ## Test Contract
 
@@ -81,6 +86,14 @@
 
 - host abort child 后，child execution 状态进入 `aborted`
 - 父侧能看到结构化 `down(reason_kind="aborted")`
+
+### Contract D — CLI trace 能看到稳定身份与监督摘要
+
+`tests.test_cli_trace_renderer` 至少覆盖：
+
+- `Task` 的 trace 能显示 `execution_id`
+- `Task` 的 trace 能显示 `down` 原因
+- `Task` 的 trace 能显示 `supervisor` action / policy
 
 ## Steps
 
@@ -113,4 +126,5 @@
 - Status: executed locally
 - Verification:
   - `python -m unittest -q tests.test_actor_supervision tests.test_actor_local_transport tests.test_subagent_task tests.test_remote_task_dispatch`
-  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_supervision.py tests/test_subagent_task.py tests/test_remote_task_dispatch.py --config ruff.toml`
+  - `python -m unittest -q tests.test_cli_trace_renderer`
+  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py openagentic_cli/trace.py tests/test_actor_supervision.py tests/test_actor_local_transport.py tests/test_subagent_task.py tests/test_remote_task_dispatch.py tests/test_cli_trace_renderer.py --config ruff.toml`

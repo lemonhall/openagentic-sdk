@@ -103,8 +103,17 @@ class TestCliTraceRenderer(unittest.TestCase):
                 tool_use_id="t1",
                 output={
                     "dispatch_mode": "k3s",
+                    "execution_id": "exec-parent-1",
                     "target_node": "k3d-v56-openagentic-agent-1",
                     "worker_execution_id": "exec-123",
+                    "down": {
+                        "reason_kind": "transport_lost",
+                        "execution_id": "exec-parent-1",
+                    },
+                    "supervisor": {
+                        "action": "retry",
+                        "policy": "retry_once_on_transport_loss",
+                    },
                 },
                 is_error=False,
             )
@@ -114,8 +123,12 @@ class TestCliTraceRenderer(unittest.TestCase):
         self.assertIn("• Subagents", s)
         self.assertIn("[host] Delegate to `writer`", s)
         self.assertIn("[host] dispatch_mode=k3s", s)
+        self.assertIn("execution_id=exec-parent-1", s)
         self.assertIn("target_node=k3d-v56-openagentic-agent-1", s)
         self.assertIn("worker_execution_id=exec-123", s)
+        self.assertIn("down=transport_lost", s)
+        self.assertIn("supervisor=retry", s)
+        self.assertIn("policy=retry_once_on_transport_loss", s)
 
     def test_task_use_renders_prompt_preview(self) -> None:
         from openagentic_cli.trace import TraceRenderer
@@ -150,8 +163,16 @@ class TestCliTraceRenderer(unittest.TestCase):
             ToolResult(
                 tool_use_id="t1",
                 output={
+                    "execution_id": "exec-local-1",
                     "child_session_id": "abc123",
                     "final_text": "done",
+                    "down": {
+                        "reason_kind": "normal",
+                    },
+                    "supervisor": {
+                        "action": "accept_result",
+                        "policy": "fail_parent_tool_use",
+                    },
                 },
                 is_error=False,
             )
@@ -159,7 +180,10 @@ class TestCliTraceRenderer(unittest.TestCase):
 
         s = out.getvalue()
         self.assertIn("[host] dispatch_mode=local", s)
+        self.assertIn("execution_id=exec-local-1", s)
         self.assertIn("child_session_id=abc123", s)
+        self.assertIn("down=normal", s)
+        self.assertIn("supervisor=accept_result", s)
 
     def test_child_tool_trace_and_done_lines_include_agent_identity(self) -> None:
         from openagentic_cli.trace import TraceRenderer

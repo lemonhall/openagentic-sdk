@@ -423,8 +423,11 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
                 for event in events
                 if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
             )
+            execution_id = task_result.output["execution_id"]
             self.assertTrue(task_result.is_error)
             self.assertEqual(task_result.output["down"]["reason_kind"], "aborted")
+            self.assertIsNotNone(options.runtime_state.actor_registry)
+            self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "aborted")
             self.assertEqual(getattr(events[-1], "final_text", None), "parent saw task failure")
 
 

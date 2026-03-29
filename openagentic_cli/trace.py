@@ -168,9 +168,12 @@ def _summarize_tool_result(
 
     if name == "Task" and isinstance(output, dict):
         dispatch_mode = output.get("dispatch_mode")
+        execution_id = output.get("execution_id")
         target_node = output.get("target_node")
         worker_execution_id = output.get("worker_execution_id")
         child_session_id = output.get("child_session_id")
+        down = output.get("down")
+        supervisor = output.get("supervisor")
 
         lines: list[str] = []
         if isinstance(dispatch_mode, str) and dispatch_mode:
@@ -178,12 +181,25 @@ def _summarize_tool_result(
         elif isinstance(child_session_id, str) and child_session_id:
             lines.append("dispatch_mode=local")
 
+        if isinstance(execution_id, str) and execution_id:
+            lines.append(f"execution_id={execution_id}")
         if isinstance(target_node, str) and target_node:
             lines.append(f"target_node={target_node}")
         if isinstance(worker_execution_id, str) and worker_execution_id:
             lines.append(f"worker_execution_id={worker_execution_id}")
         if isinstance(child_session_id, str) and child_session_id:
             lines.append(f"child_session_id={child_session_id}")
+        if isinstance(down, dict):
+            reason_kind = down.get("reason_kind")
+            if isinstance(reason_kind, str) and reason_kind:
+                lines.append(f"down={reason_kind}")
+        if isinstance(supervisor, dict):
+            action = supervisor.get("action")
+            policy = supervisor.get("policy")
+            if isinstance(action, str) and action:
+                lines.append(f"supervisor={action}")
+            if isinstance(policy, str) and policy:
+                lines.append(f"policy={policy}")
 
         return lines or ["ok"]
 

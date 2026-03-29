@@ -28,25 +28,56 @@ http://127.0.0.1:16686
 说明：
 
 - `oa chat --k3d-real` 会自己管理 chat host 的 `port-forward`
-- `Jaeger` 走固定地址 `http://127.0.0.1:16686`
+- `Jaeger` 从 v60 起走固定地址 `http://127.0.0.1:16686`
 - 打开 Jaeger 后，`real-model cluster` 主要看两个 service：
   - `oa-cluster-chat-host-real`
   - `oa-remote-worker-real`
 - `oa chat --remote-host ...` 只保留给 debug / 手工诊断，不作为默认入口
 
-如果 `http://127.0.0.1:16686` 打不开，先启动固定端口转发：
+从 v60 开始，Jaeger 的推荐路径不再是手工 `kubectl port-forward`，而是：
+
+- k3d cluster 创建时就固定映射 `16686`
+- `jaeger-query` service 在 Kubernetes 层显式声明为 `LoadBalancer`
+- 因此，cluster ready 后直接打开 `http://127.0.0.1:16686`
+
+如果它仍然打不开，不要先重新 port-forward；先按下面的 debug 附录查：
+
+- k3d cluster 是否按新 config 重建过
+- `jaeger-query` service 是否已经存在且为 `LoadBalancer`
+- Jaeger deployment 是否已经 ready
+
+## Debug 附录：手工端口诊断
+
+### A. 固定入口本身是否可达
+
+```powershell
+curl.exe http://127.0.0.1:16686/
+```
+
+### B. `jaeger-query` 是否已经是 `LoadBalancer`
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56 get svc jaeger-query -o wide"'
+```
+
+预期：
+
+- `TYPE` 为 `LoadBalancer`
+
+### C. 如果 cluster 是旧拓扑，要先重建，不要先 port-forward
+
+因为 v60 把 `16686` 的 k3d host port mapping 放进了 cluster config：
+
+- 旧 cluster 即使 namespace 还在、pod 还在，也未必能从宿主机看见 `16686`
+- 这种情况要优先重建 cluster，让新的 k3d 端口映射生效
+
+### D. `kubectl port-forward` 现在只作为排障手段
+
+只有在你想确认“Jaeger Pod 本身已经健康、只是外部暴露不通”时，才临时使用：
 
 ```powershell
 wsl -u root -e bash -lc 'su - lemonhall -c "nohup kubectl -n openagentic-v56 port-forward service/jaeger-query 16686:16686 >/tmp/oa-jaeger-16686.log 2>&1 &"'
 ```
-
-然后直接在浏览器打开：
-
-```powershell
-http://127.0.0.1:16686
-```
-
-## Debug 附录：手工端口诊断
 
 - `http://127.0.0.1:18766`
   - 这是 `smoke cluster` 常用手工入口
@@ -97,11 +128,13 @@ curl.exe http://127.0.0.1:18776/health
 - 本地 k3d 三节点实验环境仍然复用 `e2e_k3d_tests/_harness.py` 的 authoritative mirror 模型；
 - 也就是说，在本机 spike 环境里，节点看到的仓库内容仍然绑定到某个已提交 `HEAD`；
 - 仅修改 `openagentic.remote.json` / `.openagentic.remote.env` 时，不必删整个 cluster；
-- 但如果你要让当前 local k3d 节点看到新的 SDK 代码提交，还是要刷新 mirror，最稳的方式仍然是重新跑一次 k3d bring-up。
+- 现在 authoritative mirror 走稳定路径原地同步；新的 SDK 代码提交不再默认触发整 cluster 重建，而是同步 mirror 后重启相关 deployments。
 
 补充：
 
 - 从这版开始，authoritative mirror 不再放在 `/tmp`，而是放在 `~/.cache/openagentic-k3d/`；
+- k3d 预热镜像现在也会落到 `~/.cache/openagentic-k3d/images/`；tar 已命中且节点里已有镜像时，不会重复 `docker image save` / `ctr import`；
+- 真正需要外网的，只剩“本机 Docker 第一次没有该镜像”；如果发生这一步，需确保 WSL Docker daemon 能通过 `http://192.168.50.149:7897` 访问外网；
 - `oa chat --k3d-real` 在 WSL2 重启后，如果发现 k3d API 还没恢复，会自动尝试 `k3d cluster start v56-openagentic`；
 - real host / worker 启动时不再依赖公网 `pip install`，而是从 authoritative mirror 里的 `.openagentic-wheelhouse` 本地安装运行时依赖；
 - `.openagentic.remote.env` 里的代理配置现在只会被映射成 `OPENAGENTIC_WEB_*`，仅供 `WebSearch/WebFetch` 使用，不再全局污染 provider 请求。
@@ -161,7 +194,7 @@ git rev-parse --short HEAD
 
 - 最好工作区干净；
 - 至少要保证 SDK 代码的变更已经提交；
-- 因为当前本地 k3d 实验环境仍然以 authoritative mirror 的提交态为准。
+- 因为当前本地 k3d 实验环境仍然以 authoritative mirror 的提交态为准；提交后再次 bring-up / apply，mirror 会原地同步。
 
 ### Step 2. 准备 remote config 和 env
 
@@ -463,7 +496,7 @@ wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real roll
 wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout restart deployment/oa-cluster-chat-host"'
 ```
 
-### 当前本地 spike 里，改了 SDK 代码后，最稳的还是刷新 authoritative mirror
+### 当前本地 spike 里，改了 SDK 代码后，优先刷新 mirror / restart，而不是删整个 cluster
 
 如果：
 
@@ -471,8 +504,16 @@ wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real roll
 - 提交 `HEAD` 变化了
 - 你怀疑节点里挂载的 `/var/lib/openagentic/repo` 还是旧 mirror
 
-那么当前本地 k3d 实验路径里，最稳妥的仍然是重新跑一次 Step 3。  
-这是 v56 当前本地 spike 的现实限制，不是未来生产化 git pull 模型的最终形态。
+那么当前本地 k3d 实验路径里，优先做的是：
+
+1. 重新跑 bring-up / apply，让 authoritative mirror 原地同步到新的 `HEAD`
+2. 让相关 deployments `rollout restart`
+
+只有这些情况，才优先考虑删整个 cluster：
+
+- `deploy/k3d/v56-cluster.yaml` 这类 cluster 拓扑配置改了
+- 端口映射 / volume 挂载语义改了
+- cluster 本身已经损坏
 
 ## 9. 如果 real-model 还是像 smoke，一步一步这样排查
 

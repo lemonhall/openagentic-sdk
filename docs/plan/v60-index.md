@@ -20,7 +20,7 @@ v60 是对 v57 Jaeger tracing 链路和 v58/v59 Jaeger UI 能力的一次基础�
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_k3d_jaeger_exposure`
     - `wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56 get svc jaeger-query -o jsonpath=\"{.spec.type}\""'`
-  - Status: planned
+  - Status: done（verified locally 2026-03-29）
 
 - **M2: k3d 固定 16686 暴露与重建边界收口**
   - Plan: `docs/plan/v60-jaeger-loadbalancer-exposure.md`
@@ -28,7 +28,7 @@ v60 是对 v57 Jaeger tracing 链路和 v58/v59 Jaeger UI 能力的一次基础�
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_k3d_jaeger_exposure tests.test_cli_k3d_port_forward tests.test_k3d_harness_state_paths`
     - `curl.exe http://127.0.0.1:16686/`
-  - Status: planned
+  - Status: doing（fixed `16686` direct access + `LoadBalancer` + cluster recreate path verified locally 2026-03-29；`k3d-real` health 已恢复，但 real prompt regression 仍需再确认一次）
 
 - **M3: 手工测试与经验包文档收口**
   - Plan: `docs/plan/v60-jaeger-loadbalancer-exposure.md`
@@ -36,7 +36,7 @@ v60 是对 v57 Jaeger tracing 链路和 v58/v59 Jaeger UI 能力的一次基础�
   - DoD（命令证据）：
     - 文档审阅通过
     - 手工测试指南不再把 Jaeger `port-forward` 作为默认路径
-  - Status: planned
+  - Status: done（updated locally 2026-03-29）
 
 ## Plan Index
 

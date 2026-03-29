@@ -60,6 +60,7 @@ metadata:
   name: jaeger-query
   namespace: openagentic-v56
 spec:
+  type: LoadBalancer
   selector:
     app.kubernetes.io/name: jaeger
   ports:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -31,6 +32,7 @@ OTEL_COLLECTOR_HTTP_PORT = 4318
 JAEGER_DEPLOYMENT = "jaeger"
 JAEGER_QUERY_SERVICE = "jaeger-query"
 JAEGER_QUERY_PORT = 16686
+DEFAULT_IMAGE_PULL_PROXY = "http://192.168.50.149:7897"
 
 _PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
     ("rancher/mirrored-pause:3.6", "docker.io/rancher/mirrored-pause:3.6"),
@@ -41,6 +43,11 @@ _PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
     ("rancher/klipper-helm:v0.9.3-build20241008", "docker.io/rancher/klipper-helm:v0.9.3-build20241008"),
     ("rancher/klipper-lb:v0.4.9", "docker.io/rancher/klipper-lb:v0.4.9"),
     ("rancher/mirrored-library-traefik:2.11.18", "docker.io/rancher/mirrored-library-traefik:2.11.18"),
+    ("jaegertracing/all-in-one:latest", "docker.io/jaegertracing/all-in-one:latest"),
+    (
+        "otel/opentelemetry-collector-contrib:latest",
+        "docker.io/otel/opentelemetry-collector-contrib:latest",
+    ),
 )
 
 _READY = False
@@ -67,25 +74,30 @@ def ensure_cluster_ready() -> None:
 
     desired_head = current_git_head()
     desired_mirror = ensure_git_mirror()
+    desired_config_signature = _desired_cluster_config_signature(desired_mirror)
+    runtime_refresh_required = _cluster_exists() and _cluster_head() != desired_head
 
-    if _cluster_exists() and _cluster_head() != desired_head:
+    if _cluster_needs_recreate(desired_head=desired_head, desired_config_signature=desired_config_signature):
         _run(["k3d", "cluster", "delete", CLUSTER_NAME], check=False)
+        runtime_refresh_required = False
 
+    cluster_created = False
     if not _cluster_exists():
         rendered = _render_cluster_config(desired_mirror)
         _run(["k3d", "cluster", "create", "--config", str(rendered)])
-        cluster_head_path = _cluster_head_path()
-        cluster_head_path.parent.mkdir(parents=True, exist_ok=True)
-        cluster_head_path.write_text(desired_head, encoding="utf-8")
+        cluster_created = True
 
     _preload_node_images()
     _run(["kubectl", "config", "use-context", f"k3d-{CLUSTER_NAME}"])
     _ensure_kube_system_ready()
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k3d" / "v56-workers.yaml")])
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v56" / "chat-host.yaml")])
+    if runtime_refresh_required and not cluster_created:
+        _rollout_restart_smoke_runtime()
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=180s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_B_DEPLOYMENT}", "--timeout=180s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{CHAT_HOST_DEPLOYMENT}", "--timeout=180s"])
+    _write_cluster_state(desired_head=desired_head, desired_config_signature=desired_config_signature)
     _TRACING_READY = False
     _READY = True
 
@@ -357,24 +369,30 @@ def _chat_host_tracing_command() -> str:
 def _render_cluster_config(mirror_root: Path) -> Path:
     template_path = repo_root() / "deploy" / "k3d" / "v56-cluster.yaml"
     rendered_path = Path(tempfile.gettempdir()) / "openagentic-v56-cluster.yaml"
-    text = template_path.read_text(encoding="utf-8")
-    text = text.replace("__OA_REPO_ROOT__", str(mirror_root))
+    text = _render_cluster_config_text(mirror_root)
     rendered_path.write_text(text, encoding="utf-8")
     return rendered_path
 
 
-def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=repo_root(), check=check, capture_output=True, text=True)
+def _render_cluster_config_text(mirror_root: Path) -> str:
+    template_path = repo_root() / "deploy" / "k3d" / "v56-cluster.yaml"
+    text = template_path.read_text(encoding="utf-8")
+    return text.replace("__OA_REPO_ROOT__", str(mirror_root))
+
+
+def _run(
+    cmd: list[str],
+    *,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=repo_root(), check=check, capture_output=True, text=True, env=env)
 
 
 def _preload_node_images() -> None:
-    tar_root = Path(tempfile.gettempdir())
     for image_ref, expected_ref in _PRELOAD_IMAGES:
-        _ensure_image_present(image_ref)
-        safe_name = image_ref.replace("/", "_").replace(":", "_")
-        tar_path = tar_root / f"openagentic-v56-{safe_name}-amd64.tar"
-        _run(["docker", "image", "save", "--platform", "linux/amd64", image_ref, "-o", str(tar_path)])
-        remote_tar_path = f"/tmp/{safe_name}-amd64.tar"
+        tar_path = _ensure_image_archive(image_ref)
+        remote_tar_path = f"/tmp/{_image_safe_name(image_ref)}-amd64.tar"
         for node_name in (SERVER_NODE, AGENT_A_NODE, AGENT_B_NODE):
             _import_image(
                 node_name=node_name,
@@ -410,10 +428,11 @@ def _image_pull_backoff_pods(*, namespace: str) -> list[str]:
 
 
 def _import_image(*, node_name: str, tar_path: Path, remote_tar_path: str, expected_ref: str) -> None:
+    if _node_has_image(node_name=node_name, expected_ref=expected_ref):
+        return
     _run(["docker", "cp", str(tar_path), f"{node_name}:{remote_tar_path}"])
     _run(["docker", "exec", node_name, "ctr", "-n", "k8s.io", "images", "import", remote_tar_path], check=False)
-    images = _run(["docker", "exec", node_name, "ctr", "-n", "k8s.io", "images", "ls"], check=False)
-    if expected_ref not in images.stdout:
+    if not _node_has_image(node_name=node_name, expected_ref=expected_ref):
         raise RuntimeError(f"Failed to preload image '{expected_ref}' into node '{node_name}'")
 
 
@@ -421,18 +440,60 @@ def _ensure_image_present(image_ref: str) -> None:
     inspect = _run(["docker", "image", "inspect", image_ref], check=False)
     if inspect.returncode == 0:
         return
-    _run(["docker", "pull", image_ref])
+    pull = _run(["docker", "pull", image_ref], check=False, env=_docker_pull_env())
+    if pull.returncode == 0:
+        return
+    proxy = _effective_image_pull_proxy()
+    details = (pull.stderr or pull.stdout or "").strip() or "no output"
+    raise RuntimeError(
+        "docker image missing and pull failed for "
+        f"'{image_ref}'. External registry access should be one-time only. "
+        f"Ensure the WSL Docker daemon can reach the registry via proxy {proxy}. "
+        f"docker pull output: {details}"
+    )
+
+
+def _ensure_image_archive(image_ref: str) -> Path:
+    _ensure_image_present(image_ref)
+    fingerprint = _local_image_fingerprint(image_ref)
+    tar_path = _image_archive_path(image_ref)
+    metadata_path = _image_archive_metadata_path(image_ref)
+    if tar_path.exists() and metadata_path.exists():
+        if metadata_path.read_text(encoding="utf-8").strip() == fingerprint:
+            return tar_path
+    tar_path.parent.mkdir(parents=True, exist_ok=True)
+    _run(["docker", "image", "save", "--platform", "linux/amd64", image_ref, "-o", str(tar_path)])
+    metadata_path.write_text(fingerprint, encoding="utf-8")
+    return tar_path
+
+
+def _node_has_image(*, node_name: str, expected_ref: str) -> bool:
+    images = _run(["docker", "exec", node_name, "ctr", "-n", "k8s.io", "images", "ls"], check=False)
+    return expected_ref in images.stdout
+
+
+def _local_image_fingerprint(image_ref: str) -> str:
+    inspect = _run(["docker", "image", "inspect", "--format", "{{.Id}}", image_ref])
+    fingerprint = inspect.stdout.strip()
+    if not fingerprint:
+        raise RuntimeError(f"docker inspect returned empty image id for '{image_ref}'")
+    return fingerprint
 
 
 def ensure_git_mirror() -> Path:
-    mirror = _mirror_root_for_head(current_git_head())
-    if (mirror / ".git").exists():
-        return mirror
-    if mirror.exists():
-        shutil.rmtree(mirror)
-    mirror.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "clone", "--no-hardlinks", "--no-checkout", str(repo_root()), str(mirror)])
-    _run(["git", "-C", str(mirror), "checkout", "--force", current_git_head()])
+    mirror = _authoritative_mirror_root()
+    head = current_git_head()
+    if not (mirror / ".git").exists():
+        if mirror.exists():
+            shutil.rmtree(mirror)
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        _run(["git", "clone", "--no-hardlinks", "--no-checkout", str(repo_root()), str(mirror)])
+    _run(["git", "-C", str(mirror), "remote", "set-url", "origin", str(repo_root())], check=False)
+    _run(["git", "-C", str(mirror), "fetch", "--force", "--prune", "origin"])
+    _run(["git", "-C", str(mirror), "checkout", "--force", head])
+    _run(["git", "-C", str(mirror), "clean", "-fdx"])
+    _mirror_synced_head_path().parent.mkdir(parents=True, exist_ok=True)
+    _mirror_synced_head_path().write_text(head, encoding="utf-8")
     return mirror
 
 
@@ -443,8 +504,28 @@ def _k3d_state_root() -> Path:
     return Path.home() / ".cache" / "openagentic-k3d"
 
 
-def _mirror_root_for_head(head: str) -> Path:
-    return _k3d_state_root() / "mirrors" / f"openagentic-v56-mirror-{head[:12]}"
+def _authoritative_mirror_root() -> Path:
+    return _k3d_state_root() / "mirrors" / "openagentic-v56-authoritative"
+
+
+def _mirror_synced_head_path() -> Path:
+    return _k3d_state_root() / "state" / "openagentic-v56-mirror-head.txt"
+
+
+def _image_cache_root() -> Path:
+    return _k3d_state_root() / "images"
+
+
+def _image_safe_name(image_ref: str) -> str:
+    return image_ref.replace("/", "_").replace(":", "_")
+
+
+def _image_archive_path(image_ref: str) -> Path:
+    return _image_cache_root() / f"{_image_safe_name(image_ref)}-amd64.tar"
+
+
+def _image_archive_metadata_path(image_ref: str) -> Path:
+    return _image_cache_root() / f"{_image_safe_name(image_ref)}-amd64.image-id.txt"
 
 
 def _cluster_head() -> str:
@@ -454,8 +535,60 @@ def _cluster_head() -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _cluster_config_signature() -> str:
+    path = _cluster_config_signature_path()
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
 def _cluster_head_path() -> Path:
     return _k3d_state_root() / "state" / "openagentic-v56-cluster-head.txt"
+
+
+def _cluster_config_signature_path() -> Path:
+    return _k3d_state_root() / "state" / "openagentic-v56-cluster-config-signature.txt"
+
+
+def _desired_cluster_config_signature(mirror_root: Path) -> str:
+    rendered = _render_cluster_config_text(mirror_root)
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _cluster_needs_recreate(*, desired_head: str, desired_config_signature: str) -> bool:
+    if not _cluster_exists():
+        return False
+    return _cluster_config_signature() != desired_config_signature
+
+
+def _write_cluster_state(*, desired_head: str, desired_config_signature: str) -> None:
+    cluster_head_path = _cluster_head_path()
+    cluster_head_path.parent.mkdir(parents=True, exist_ok=True)
+    cluster_head_path.write_text(desired_head, encoding="utf-8")
+    _cluster_config_signature_path().write_text(desired_config_signature, encoding="utf-8")
+
+
+def _rollout_restart_smoke_runtime() -> None:
+    for deployment in (WORKER_A_DEPLOYMENT, WORKER_B_DEPLOYMENT, CHAT_HOST_DEPLOYMENT):
+        _run(["kubectl", "-n", NAMESPACE, "rollout", "restart", f"deployment/{deployment}"])
+
+
+def _effective_image_pull_proxy() -> str:
+    for key in ("OA_K3D_IMAGE_PULL_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return DEFAULT_IMAGE_PULL_PROXY
+
+
+def _docker_pull_env() -> dict[str, str]:
+    env = os.environ.copy()
+    proxy = _effective_image_pull_proxy()
+    env.setdefault("HTTP_PROXY", proxy)
+    env.setdefault("HTTPS_PROXY", proxy)
+    env.setdefault("http_proxy", env["HTTP_PROXY"])
+    env.setdefault("https_proxy", env["HTTPS_PROXY"])
+    return env
 
 
 def _pick_free_local_port() -> int:

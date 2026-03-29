@@ -62,8 +62,9 @@
 
 当前布局：
 
-- `~/.cache/openagentic-k3d/mirrors/openagentic-v56-mirror-<head>`
+- `~/.cache/openagentic-k3d/mirrors/openagentic-v56-authoritative`
 - `~/.cache/openagentic-k3d/state/openagentic-v56-cluster-head.txt`
+- `~/.cache/openagentic-k3d/state/openagentic-v56-mirror-head.txt`
 
 这意味着：
 
@@ -81,7 +82,68 @@
 
 这让 `oa chat --k3d-real` 在 WSL2 重启后的第一轮恢复更稳。
 
-### 2.3 real cluster 改成本地 wheelhouse 启动
+### 2.3 k3d cluster 现在只因拓扑漂移而重建，不再因 git `HEAD` 漂移重建
+
+这在 v60 暴露出一个新问题：
+
+- `deploy/k3d/v56-cluster.yaml` 改了端口映射；
+- 但如果当前 working tree 还没提交，`HEAD` 其实没变；
+- 结果就是旧 cluster 被错误复用，新的 `16686` host port mapping 根本不会生效。
+
+现在 `_harness.py` 的语义改成了两条独立链路：
+
+- `authoritative mirror` 固定在稳定路径里，新的提交只会原地 `fetch + checkout`
+- `cluster head`
+- `cluster config signature`
+
+只有这些情况才会删旧 cluster 重建：
+
+- k3d cluster config 渲染结果变了
+- cluster 本身不存在了
+
+而 git `HEAD` 变化时的处理变成：
+
+- 更新稳定 mirror 的内容
+- 重新 `kubectl apply`
+- 对 smoke host / worker 做一次 `rollout restart`
+
+也就是说：
+
+- 改 SDK 代码，不再默认触发整 cluster 重建
+- 改端口映射 / volume 拓扑，才需要重建 cluster
+
+这让“基础设施拓扑变更”和“代码内容变更”终于被正确区分开：
+
+- 代码内容变更看 mirror sync + rollout restart
+- cluster 端口/挂载拓扑变更看 config signature
+
+### 2.4 k3d 节点镜像预热改成持久 tar cache
+
+之前 `_preload_node_images()` 每次都会：
+
+- `docker image save`
+- `docker cp`
+- `ctr images import`
+
+即使本机 Docker 已经有镜像、节点里也已经导入过，也还会重复做一遍。
+
+现在语义改成：
+
+- 本机 Docker 缺镜像时，才允许一次 `docker pull`
+- 本机 tar archive 存在且 image id 没变时，直接复用
+- 节点里已经有目标镜像时，直接跳过 `docker cp + ctr import`
+
+当前 cache 路径：
+
+- `~/.cache/openagentic-k3d/images/<image>-amd64.tar`
+- `~/.cache/openagentic-k3d/images/<image>-amd64.image-id.txt`
+
+这意味着：
+
+- “拉外网镜像”不再是每次 bring-up 的默认动作
+- 真正需要访问外网的，只剩“本机 Docker 第一次根本没有这个镜像”
+- 如果第一次 pull 失败，报错会明确提示：应让 WSL Docker daemon 通过 `http://192.168.50.149:7897` 访问外网
+### 2.5 real cluster 改成本地 wheelhouse 启动
 
 `scripts/apply_v56_real_cluster.py` 现在会先把运行时依赖下载到 authoritative mirror：
 
@@ -109,7 +171,7 @@ python -m pip install --no-index --find-links /workspace/repo/.openagentic-wheel
 
 - relay 掉了也不会再因为 `pip install` 失败而把整个 real namespace 打进 `CrashLoopBackOff`。
 
-### 2.4 代理只给 Web 工具，不再全局污染 provider
+### 2.6 代理只给 Web 工具，不再全局污染 provider
 
 `scripts/apply_v56_real_cluster.py` 现在会把 `.openagentic.remote.env` 里的：
 
@@ -148,6 +210,7 @@ python -m pip install --no-index --find-links /workspace/repo/.openagentic-wheel
    - real host / worker 仍能成功 rollout
    - `oa chat --k3d-real` 仍能正常直接聊天
    - writer remote subagent 仍能正常执行
+4. 当 k3d cluster config 发生漂移时，harness 不再错误复用旧 cluster
 
 换句话说：
 

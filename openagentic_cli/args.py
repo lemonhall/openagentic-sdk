@@ -2,11 +2,23 @@ from __future__ import annotations
 
 import argparse
 
+from . import __version__
+
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="oa")
+    parser = argparse.ArgumentParser(
+        prog="oa",
+        epilog=(
+            "Common examples:\n"
+            "  oa chat --help\n"
+            "  oa chat --k3d-real\n"
+            "  oa run \"hello\"\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     # OpenCode VSCode extension parity: it invokes `opencode --port <n>`.
     # We support `oa --port <n>` as an alias of `oa serve --port <n>`.
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--host", default=None, help="Bind host (alias for `oa serve --host`; used when no subcommand)")
     parser.add_argument("--port", default=None, type=int, help="Bind port (alias for `oa serve --port`; used when no subcommand)")
     sub = parser.add_subparsers(dest="command")

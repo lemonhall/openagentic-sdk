@@ -135,4 +135,8 @@
 
 - Date: 2026-03-29
 - Env: Windows 11 + PowerShell 7.x
-- Status: planned；not yet executed
+- Status:
+  - local tracing/unit path 已完成并通过：`python -m unittest -q tests.test_actor_tracing`
+  - Collector / Jaeger manifests 已落地：`deploy/k8s/v57/otel-collector.yaml`、`deploy/k8s/v57/jaeger.yaml`
+  - k3d trace smoke 已改成直接 `host -> remote worker` 路径：`e2e_k3d_tests/e2e_remote_actor_trace_smoke.py`
+  - 待实跑：docker-backed k3d trace e2e、Jaeger Web UI 手工验证

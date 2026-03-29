@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Protocol
 
 from ..events import Result
 from ..options import AgentDefinition
@@ -62,6 +62,7 @@ class RemoteTaskRequest:
     project_dir: str | None
     git_revision: str
     worker_execution_id: str | None = None
+    trace_context: Mapping[str, str] = field(default_factory=dict)
 
     def make_handle(
         self,

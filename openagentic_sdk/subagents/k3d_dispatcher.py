@@ -6,6 +6,7 @@ import socket
 import subprocess
 import time
 
+from .actor_tracing import ActorTracing
 from .remote_http import HttpRemoteTaskDispatcher
 
 
@@ -26,6 +27,10 @@ class K3dPortForwardRemoteTaskDispatcher:
         self._pod_label_key = pod_label_key
         self._timeout_s = timeout_s
         self._http_timeout_s = http_timeout_s
+        self._tracing: ActorTracing | None = None
+
+    def bind_actor_tracing(self, tracing: ActorTracing) -> None:
+        self._tracing = tracing
 
     async def dispatch(self, request):
         node_name = request.definition.executor.node_name or ""
@@ -50,10 +55,13 @@ class K3dPortForwardRemoteTaskDispatcher:
 
         try:
             await asyncio.to_thread(self._wait_for_port_forward, proc, local_port)
-            base_dispatcher = HttpRemoteTaskDispatcher(
-                base_url=f"http://127.0.0.1:{local_port}",
-                timeout_s=self._http_timeout_s,
-            )
+            dispatcher_kwargs = {
+                "base_url": f"http://127.0.0.1:{local_port}",
+                "timeout_s": self._http_timeout_s,
+            }
+            if self._tracing is not None:
+                dispatcher_kwargs["tracing"] = self._tracing
+            base_dispatcher = HttpRemoteTaskDispatcher(**dispatcher_kwargs)
             handle = await base_dispatcher.dispatch(request)
         except Exception:
             self._stop_port_forward(proc)

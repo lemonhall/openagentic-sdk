@@ -4,6 +4,7 @@ from ..options import OpenAgenticOptions
 from ..subagents.actor_local_transport import LocalActorTransport
 from ..subagents.actor_mailbox import ActorMailboxStore
 from ..subagents.actor_registry import ActorExecutionRegistry
+from ..subagents.actor_tracing import ensure_actor_tracing
 from .provider_input import ProviderInputMixin
 from .query_loop import QueryLoopMixin
 from .slash_command import SlashCommandMixin
@@ -28,11 +29,13 @@ class AgentRuntime(
         self._options = options
         self._agent_name = agent_name
         self._parent_tool_use_id = parent_tool_use_id
+        self.actor_tracing = ensure_actor_tracing(options)
         self.actor_registry = ActorExecutionRegistry()
         self.actor_mailbox_store = ActorMailboxStore()
         self._local_actor_transport = LocalActorTransport(
             registry=self.actor_registry,
             mailbox_store=self.actor_mailbox_store,
+            tracing=self.actor_tracing,
         )
         options.runtime_state.bind_runtime(self)
 

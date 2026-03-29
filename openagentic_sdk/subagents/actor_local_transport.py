@@ -5,7 +5,7 @@ import contextlib
 import inspect
 import uuid
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from ..events import Result
 from ..serialization import event_to_dict
@@ -13,6 +13,7 @@ from .actor_lifecycle import classify_child_result_down, exception_down
 from .actor_mailbox import ActorMailboxStore
 from .actor_protocol import ActorEnvelope
 from .actor_registry import ActorExecutionRegistry
+from .actor_tracing import ActorTracing, actor_execution_attributes, down_trace_attributes, envelope_trace_attributes
 from .actor_transport import ActorExecutionHandle, ActorSpawnSpec
 
 
@@ -22,12 +23,20 @@ class _LocalExecutionState:
     queue: asyncio.Queue[ActorEnvelope | object]
     control_queue: asyncio.Queue[ActorEnvelope | object]
     task: asyncio.Task[None]
+    trace_span: Any | None
 
 
 class LocalActorTransport:
-    def __init__(self, *, registry: ActorExecutionRegistry, mailbox_store: ActorMailboxStore) -> None:
+    def __init__(
+        self,
+        *,
+        registry: ActorExecutionRegistry,
+        mailbox_store: ActorMailboxStore,
+        tracing: ActorTracing | None = None,
+    ) -> None:
         self._registry = registry
         self._mailbox_store = mailbox_store
+        self._tracing = tracing or ActorTracing(service_name="openagentic-sdk")
         self._executions: dict[str, _LocalExecutionState] = {}
         self._done_sentinel = object()
 
@@ -47,14 +56,36 @@ class LocalActorTransport:
             event_mailbox=spec.event_mailbox,
             control_mailbox=spec.control_mailbox,
         )
+        trace_links = [
+            link
+            for link in (self._tracing.link_from_carrier(carrier) for carrier in spec.trace_links)
+            if link is not None
+        ]
+        trace_span = self._tracing.start_span(
+            "oa.actor.execution",
+            attributes=actor_execution_attributes(
+                execution_id=spec.execution_id,
+                actor_id=spec.child_actor_id,
+                agent_name=spec.agent_name,
+                dispatch_mode=spec.dispatch_mode,
+                transport_kind="local",
+            ),
+            parent_context=self._tracing.extract_context(spec.trace_context) if spec.trace_context else None,
+            links=trace_links,
+        )
+        self._tracing.add_event(trace_span, "spawn", attributes={"oa.mailbox": spec.event_mailbox})
         queue: asyncio.Queue[ActorEnvelope | object] = asyncio.Queue()
         control_queue: asyncio.Queue[ActorEnvelope | object] = asyncio.Queue()
-        task = asyncio.create_task(self._run_child(spec, queue, control_queue), name=f"local-actor-{spec.execution_id}")
+        task = asyncio.create_task(
+            self._run_child(spec, queue, control_queue, trace_span),
+            name=f"local-actor-{spec.execution_id}",
+        )
         self._executions[spec.execution_id] = _LocalExecutionState(
             handle=handle,
             queue=queue,
             control_queue=control_queue,
             task=task,
+            trace_span=trace_span,
         )
         return handle
 
@@ -64,6 +95,7 @@ class LocalActorTransport:
             raise KeyError(f"unknown execution_id: {handle.execution_id}")
         if not self._mailbox_store.append(envelope):
             return
+        self._tracing.add_event(state.trace_span, "send", attributes=envelope_trace_attributes(envelope))
         self._registry.record_mailbox_head(
             handle.execution_id,
             mailbox=envelope.mailbox,
@@ -75,6 +107,7 @@ class LocalActorTransport:
         state = self._executions.get(handle.execution_id)
         if state is None:
             return
+        self._tracing.add_event(state.trace_span, "abort", attributes={"oa.execution.id": handle.execution_id})
         await state.control_queue.put(self._done_sentinel)
         state.task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -89,6 +122,7 @@ class LocalActorTransport:
         except asyncio.CancelledError:
             pass
         finally:
+            self._tracing.end_span(state.trace_span)
             self._executions.pop(handle.execution_id, None)
 
     async def _run_child(
@@ -96,45 +130,47 @@ class LocalActorTransport:
         spec: ActorSpawnSpec,
         queue: asyncio.Queue[ActorEnvelope | object],
         control_queue: asyncio.Queue[ActorEnvelope | object],
+        trace_span: Any | None,
     ) -> None:
         last_result: Result | None = None
         try:
-            stream = spec.run(self._control_stream(control_queue))
-            if inspect.isawaitable(stream):
-                stream = await stream
-            async for event in stream:
-                if isinstance(event, Result):
-                    last_result = event
-                envelope = ActorEnvelope(
-                    protocol_version="v1",
-                    message_id=uuid.uuid4().hex,
-                    execution_id=spec.execution_id,
-                    sender_actor_id=spec.child_actor_id,
-                    recipient_actor_id=spec.parent_actor_id,
-                    mailbox=spec.event_mailbox,
-                    seq=self._mailbox_store.next_seq(spec.execution_id, spec.event_mailbox),
-                    kind="child_event",
-                    payload={"event": event_to_dict(event)},
-                    ts=asyncio.get_running_loop().time(),
-                )
-                if not self._mailbox_store.append(envelope):
-                    continue
-                self._registry.record_mailbox_head(
+            with self._tracing.use_span(trace_span):
+                stream = spec.run(self._control_stream(control_queue))
+                if inspect.isawaitable(stream):
+                    stream = await stream
+                async for event in stream:
+                    if isinstance(event, Result):
+                        last_result = event
+                    envelope = ActorEnvelope(
+                        protocol_version="v1",
+                        message_id=uuid.uuid4().hex,
+                        execution_id=spec.execution_id,
+                        sender_actor_id=spec.child_actor_id,
+                        recipient_actor_id=spec.parent_actor_id,
+                        mailbox=spec.event_mailbox,
+                        seq=self._mailbox_store.next_seq(spec.execution_id, spec.event_mailbox),
+                        kind="child_event",
+                        payload={"event": event_to_dict(event)},
+                        ts=asyncio.get_running_loop().time(),
+                    )
+                    if not self._mailbox_store.append(envelope):
+                        continue
+                    self._registry.record_mailbox_head(
+                        spec.execution_id,
+                        mailbox=spec.event_mailbox,
+                        seq=self._mailbox_store.head_seq(spec.execution_id, spec.event_mailbox),
+                    )
+                    await queue.put(envelope)
+                self._record_down(
                     spec.execution_id,
-                    mailbox=spec.event_mailbox,
-                    seq=self._mailbox_store.head_seq(spec.execution_id, spec.event_mailbox),
+                    classify_child_result_down(
+                        execution_id=spec.execution_id,
+                        actor_id=spec.child_actor_id,
+                        dispatch_mode=spec.dispatch_mode,
+                        result=last_result,
+                        child_session_id=spec.child_session_id,
+                    ),
                 )
-                await queue.put(envelope)
-            self._record_down(
-                spec.execution_id,
-                classify_child_result_down(
-                    execution_id=spec.execution_id,
-                    actor_id=spec.child_actor_id,
-                    dispatch_mode=spec.dispatch_mode,
-                    result=last_result,
-                    child_session_id=spec.child_session_id,
-                ),
-            )
         except asyncio.CancelledError:
             self._record_down(
                 spec.execution_id,
@@ -172,6 +208,7 @@ class LocalActorTransport:
             item = await state.queue.get()
             if item is self._done_sentinel:
                 break
+            self._tracing.add_event(state.trace_span, "receive", attributes=envelope_trace_attributes(item))
             yield item
 
     async def _control_stream(self, queue: asyncio.Queue[ActorEnvelope | object]) -> AsyncIterator[ActorEnvelope]:
@@ -186,5 +223,6 @@ class LocalActorTransport:
         state = self._executions.get(execution_id)
         if state is None:
             return
+        self._tracing.add_event(state.trace_span, "down", attributes=down_trace_attributes(record.last_down))
         if not state.handle.down_future.done():
             state.handle.down_future.set_result(record.last_down)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import socket
 import subprocess
@@ -23,6 +24,12 @@ WORKER_A_SERVICE = "oa-remote-worker-agent-0"
 WORKER_B_SERVICE = "oa-remote-worker-agent-1"
 CHAT_HOST_DEPLOYMENT = "oa-cluster-chat-host"
 CHAT_HOST_SERVICE = "oa-cluster-chat-host"
+OTEL_COLLECTOR_DEPLOYMENT = "otel-collector"
+OTEL_COLLECTOR_SERVICE = "otel-collector"
+OTEL_COLLECTOR_HTTP_PORT = 4318
+JAEGER_DEPLOYMENT = "jaeger"
+JAEGER_QUERY_SERVICE = "jaeger-query"
+JAEGER_QUERY_PORT = 16686
 
 _PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
     ("rancher/mirrored-pause:3.6", "docker.io/rancher/mirrored-pause:3.6"),
@@ -36,6 +43,7 @@ _PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
 )
 
 _READY = False
+_TRACING_READY = False
 
 
 def repo_root() -> Path:
@@ -48,6 +56,7 @@ def authoritative_repo_root() -> Path:
 
 def ensure_cluster_ready() -> None:
     global _READY
+    global _TRACING_READY
     if _READY:
         return
 
@@ -74,7 +83,39 @@ def ensure_cluster_ready() -> None:
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=180s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_B_DEPLOYMENT}", "--timeout=180s"])
     _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{CHAT_HOST_DEPLOYMENT}", "--timeout=180s"])
+    _TRACING_READY = False
     _READY = True
+
+
+def ensure_tracing_ready() -> None:
+    global _TRACING_READY
+    ensure_cluster_ready()
+    if _TRACING_READY:
+        return
+
+    _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v57" / "jaeger.yaml")])
+    _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v57" / "otel-collector.yaml")])
+    _patch_tracing_deployment(
+        deployment=WORKER_A_DEPLOYMENT,
+        container_name="worker",
+        service_name="oa-remote-worker",
+        node_env_var="OA_REMOTE_NODE_NAME",
+        role="worker",
+        command=_worker_tracing_command(),
+    )
+    _patch_tracing_deployment(
+        deployment=WORKER_B_DEPLOYMENT,
+        container_name="worker",
+        service_name="oa-remote-worker",
+        node_env_var="OA_REMOTE_NODE_NAME",
+        role="worker",
+        command=_worker_tracing_command(),
+    )
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{JAEGER_DEPLOYMENT}", "--timeout=240s"])
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{OTEL_COLLECTOR_DEPLOYMENT}", "--timeout=240s"])
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_A_DEPLOYMENT}", "--timeout=240s"])
+    _run(["kubectl", "-n", NAMESPACE, "rollout", "status", f"deployment/{WORKER_B_DEPLOYMENT}", "--timeout=240s"])
+    _TRACING_READY = True
 
 
 def build_dispatcher():
@@ -140,6 +181,54 @@ def port_forward_worker(node_name: str):
         _stop_port_forward(proc)
 
 
+@contextmanager
+def port_forward_jaeger_query():
+    local_port = _pick_free_local_port()
+    proc = subprocess.Popen(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
+            "port-forward",
+            f"service/{JAEGER_QUERY_SERVICE}",
+            f"{local_port}:{JAEGER_QUERY_PORT}",
+        ],
+        cwd=repo_root(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_for_port_forward(proc, local_port)
+        yield f"http://127.0.0.1:{local_port}"
+    finally:
+        _stop_port_forward(proc)
+
+
+@contextmanager
+def port_forward_otel_collector_http():
+    local_port = _pick_free_local_port()
+    proc = subprocess.Popen(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
+            "port-forward",
+            f"service/{OTEL_COLLECTOR_SERVICE}",
+            f"{local_port}:{OTEL_COLLECTOR_HTTP_PORT}",
+        ],
+        cwd=repo_root(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_for_port_forward(proc, local_port)
+        yield f"http://127.0.0.1:{local_port}"
+    finally:
+        _stop_port_forward(proc)
+
+
 def _cluster_exists() -> bool:
     proc = _run(["k3d", "cluster", "list"], check=False)
     if proc.returncode != 0:
@@ -160,6 +249,79 @@ def _worker_service_for(node_name: str) -> str:
     if node_name == AGENT_B_NODE:
         return WORKER_B_SERVICE
     raise ValueError(f"unknown worker node for port-forward: {node_name}")
+
+
+def _patch_tracing_deployment(
+    *,
+    deployment: str,
+    container_name: str,
+    service_name: str,
+    node_env_var: str,
+    role: str,
+    command: str,
+) -> None:
+    otlp_endpoint = f"http://{OTEL_COLLECTOR_SERVICE}.{NAMESPACE}:4318"
+    patch = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": container_name,
+                            "env": [
+                                {"name": "OTEL_SERVICE_NAME", "value": service_name},
+                                {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": otlp_endpoint},
+                                {"name": "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "value": f"{otlp_endpoint}/v1/traces"},
+                                {"name": "OTEL_EXPORTER_OTLP_PROTOCOL", "value": "http/protobuf"},
+                                {"name": "OA_TRACE_NODE_ENV", "value": node_env_var},
+                                {"name": "OA_TRACE_ROLE", "value": role},
+                            ],
+                            "command": ["sh", "-lc", command],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    _run(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
+            "patch",
+            "deployment",
+            deployment,
+            "--type",
+            "strategic",
+            "-p",
+            json.dumps(patch),
+        ]
+    )
+
+
+def _python_tracing_bootstrap() -> str:
+    return (
+        "python -m pip install -q --no-cache-dir "
+        "\"protobuf<6\" "
+        "\"opentelemetry-api<2\" "
+        "\"opentelemetry-sdk<2\" "
+        "\"opentelemetry-exporter-otlp-proto-http<2\""
+    )
+
+
+def _worker_tracing_command() -> str:
+    return (
+        "set -e; "
+        f"{_python_tracing_bootstrap()}; "
+        "export OTEL_RESOURCE_ATTRIBUTES=\"oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker\"; "
+        "python -u -m openagentic_sdk.subagents.remote_http_worker_server "
+        "--host 0.0.0.0 "
+        "--port 8765 "
+        "--repo-root /workspace/repo "
+        "--session-root /tmp/openagentic-remote "
+        "--provider-factory e2e_k3d_tests._smoke_provider:create_worker_provider "
+        "--node-name-env OA_REMOTE_NODE_NAME"
+    )
 
 
 def _render_cluster_config(mirror_root: Path) -> Path:

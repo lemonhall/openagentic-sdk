@@ -80,11 +80,13 @@ class OpenAgenticRuntimeState:
     runtime: Any | None = None
     actor_registry: Any | None = None
     actor_mailbox_store: Any | None = None
+    actor_tracing: Any | None = None
 
     def bind_runtime(self, runtime: Any) -> None:
         self.runtime = runtime
         self.actor_registry = getattr(runtime, "actor_registry", None)
         self.actor_mailbox_store = getattr(runtime, "actor_mailbox_store", None)
+        self.actor_tracing = getattr(runtime, "actor_tracing", self.actor_tracing)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from .actor_lifecycle import ActorDownEvent
 from .actor_protocol import ActorEnvelope
@@ -29,6 +29,8 @@ class ActorSpawnSpec:
     run: Callable[[AsyncIterator[ActorEnvelope]], AsyncIterator[Any] | Awaitable[AsyncIterator[Any]]]
     event_mailbox: str = "child_events"
     control_mailbox: str = "control"
+    trace_context: Mapping[str, str] | None = None
+    trace_links: Sequence[Mapping[str, str]] = ()
 
 
 class ActorTransport(Protocol):

@@ -14,8 +14,16 @@ from ..sessions.store import FileSessionStore
 from ..subagents.actor_lifecycle import ActorDownEvent
 from ..subagents.actor_local_transport import LocalActorTransport
 from ..subagents.actor_mailbox import ActorMailboxStore
+from ..subagents.actor_protocol import ActorEnvelope
 from ..subagents.actor_registry import ActorExecutionRegistry
 from ..subagents.actor_supervisor import ActorSupervisor, SupervisorDecision
+from ..subagents.actor_tracing import (
+    actor_execution_attributes,
+    down_trace_attributes,
+    ensure_actor_tracing,
+    envelope_trace_attributes,
+    supervisor_trace_attributes,
+)
 from ..subagents.actor_transport import ActorSpawnSpec
 from ..subagents.remote_dispatch import resolve_git_revision
 from ..subagents.remote_types import RemoteTaskDispatchHandle, RemoteTaskRequest
@@ -38,7 +46,9 @@ class TaskToolMixin:
             return transport
         registry = ActorExecutionRegistry()
         mailbox_store = ActorMailboxStore()
-        transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store)
+        tracing = ensure_actor_tracing(self._options)
+        self.actor_tracing = tracing
+        transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store, tracing=tracing)
         self.actor_registry = registry
         self.actor_mailbox_store = mailbox_store
         self._local_actor_transport = transport
@@ -136,10 +146,12 @@ class TaskToolMixin:
         store: FileSessionStore,
         handle: RemoteTaskDispatchHandle,
         outcome: _AttemptOutcome,
+        trace_span: Any | None = None,
     ) -> AsyncIterator[Any]:
-        receive_iter = handle.events
+        receive_iter = handle.envelopes if handle.envelopes is not None else handle.events
         next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
         abort_task = asyncio.create_task(self._wait_for_abort_event()) if self._should_watch_abort() else None
+        tracing = ensure_actor_tracing(self._options)
         try:
             while True:
                 pending = {next_task}
@@ -156,9 +168,24 @@ class TaskToolMixin:
                     continue
                 if next_task not in done:
                     continue
-                child_event = next_task.result()
-                if child_event is _STREAM_END:
+                item = next_task.result()
+                if item is _STREAM_END:
                     break
+                child_event = item
+                if handle.envelopes is not None and isinstance(item, ActorEnvelope):
+                    tracing.add_event(trace_span, "receive", attributes=envelope_trace_attributes(item))
+                    if item.kind != "child_event":
+                        next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
+                        continue
+                    payload = item.payload if isinstance(item.payload, dict) else {}
+                    child_event = payload.get("event")
+                    if isinstance(child_event, dict):
+                        child_event = event_from_dict(child_event)
+                    if child_event is None:
+                        next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
+                        continue
+                else:
+                    tracing.add_event(trace_span, "receive", attributes={"oa.execution.id": handle.execution_id})
                 store.append_event(session_id, child_event)
                 yield child_event
                 if isinstance(child_event, Result):
@@ -190,10 +217,12 @@ class TaskToolMixin:
         transport: LocalActorTransport,
         handle,
         outcome: _AttemptOutcome,
+        trace_span: Any | None = None,
     ) -> AsyncIterator[Any]:
         receive_iter = transport.receive(handle)
         next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
         abort_task = asyncio.create_task(self._wait_for_abort_event()) if self._should_watch_abort() else None
+        tracing = ensure_actor_tracing(self._options)
         try:
             while True:
                 pending = {next_task}
@@ -212,6 +241,7 @@ class TaskToolMixin:
                 envelope = next_task.result()
                 if envelope is _STREAM_END:
                     break
+                tracing.add_event(trace_span, "receive", attributes=envelope_trace_attributes(envelope))
                 payload = envelope.payload if isinstance(envelope.payload, dict) else {}
                 child_event = payload.get("event")
                 if isinstance(child_event, dict):
@@ -354,6 +384,8 @@ class TaskToolMixin:
         store: FileSessionStore,
     ) -> AsyncIterator[Any]:
         options = self._options
+        tracing = ensure_actor_tracing(options)
+        self.actor_tracing = tracing
 
         agent = tool_input.get("agent")
         task_prompt = tool_input.get("prompt")
@@ -415,78 +447,118 @@ class TaskToolMixin:
                 store.append_event(session_id, result)
                 yield result
                 return
+            bind_actor_tracing = getattr(dispatcher, "bind_actor_tracing", None)
+            if callable(bind_actor_tracing):
+                bind_actor_tracing(tracing)
 
             git_revision = resolve_git_revision(cwd=options.cwd)
             retry_count = 0
             remote_execution_id = uuid.uuid4().hex
             while True:
-                request = RemoteTaskRequest(
-                    parent_session_id=session_id,
-                    parent_tool_use_id=tool_call.tool_use_id,
-                    agent_name=agent,
-                    prompt=task_prompt,
-                    definition=definition,
-                    cwd=options.cwd,
-                    project_dir=options.project_dir,
-                    git_revision=git_revision,
-                    worker_execution_id=remote_execution_id,
+                task_span = tracing.start_span(
+                    "oa.task.execution",
+                    attributes=actor_execution_attributes(
+                        execution_id=remote_execution_id,
+                        actor_id=self._agent_name or "host",
+                        agent_name=agent,
+                        dispatch_mode="k3s",
+                        transport_kind="http",
+                    ),
                 )
                 try:
-                    handle = await dispatcher.dispatch(request)
-                except Exception as exc:  # noqa: BLE001
-                    result, decision = self._task_dispatch_failure_result(
-                        tool_use_id=tool_call.tool_use_id,
-                        agent=agent,
-                        dispatch_mode="k3s",
-                        git_revision=git_revision,
-                        target_node=definition.executor.node_name,
-                        execution_id=remote_execution_id,
-                        exc=exc,
-                        supervisor_policy=supervisor_policy,
-                        retry_count=retry_count,
-                    )
-                    if decision.action == "retry":
-                        retry_count += 1
-                        continue
-                    store.append_event(session_id, result)
-                    yield result
-                    return
+                    with tracing.use_span(task_span):
+                        request = RemoteTaskRequest(
+                            parent_session_id=session_id,
+                            parent_tool_use_id=tool_call.tool_use_id,
+                            agent_name=agent,
+                            prompt=task_prompt,
+                            definition=definition,
+                            cwd=options.cwd,
+                            project_dir=options.project_dir,
+                            git_revision=git_revision,
+                            worker_execution_id=remote_execution_id,
+                            trace_context=tracing.inject_current_context(),
+                        )
+                        tracing.add_event(task_span, "spawn", attributes={"oa.execution.id": remote_execution_id})
+                        try:
+                            handle = await dispatcher.dispatch(request)
+                        except Exception as exc:  # noqa: BLE001
+                            result, decision = self._task_dispatch_failure_result(
+                                tool_use_id=tool_call.tool_use_id,
+                                agent=agent,
+                                dispatch_mode="k3s",
+                                git_revision=git_revision,
+                                target_node=definition.executor.node_name,
+                                execution_id=remote_execution_id,
+                                exc=exc,
+                                supervisor_policy=supervisor_policy,
+                                retry_count=retry_count,
+                            )
+                            tracing.add_event(task_span, "down", attributes=down_trace_attributes(ActorDownEvent.from_payload(result.output["down"])))
+                            tracing.add_event(
+                                task_span,
+                                "supervisor.decision",
+                                attributes=supervisor_trace_attributes(
+                                    action=decision.action,
+                                    policy=decision.policy,
+                                    retry_count=decision.retry_count,
+                                ),
+                            )
+                            if decision.action == "retry":
+                                retry_count += 1
+                                continue
+                            store.append_event(session_id, result)
+                            yield result
+                            return
 
-                self._record_remote_execution(execution_id=handle.execution_id, agent=agent, handle=handle)
+                        self._record_remote_execution(execution_id=handle.execution_id, agent=agent, handle=handle)
 
-                outcome = _AttemptOutcome()
-                async for child_event in self._iter_remote_attempt(
-                    session_id=session_id,
-                    store=store,
-                    handle=handle,
-                    outcome=outcome,
-                ):
-                    yield child_event
-                down = outcome.down
-                if down is None:
-                    raise RuntimeError("remote attempt completed without down event")
-                decision = ActorSupervisor.decide(policy=supervisor_policy, down=down, retry_count=retry_count)
-                if decision.action == "retry":
-                    retry_count += 1
-                    continue
+                        outcome = _AttemptOutcome()
+                        async for child_event in self._iter_remote_attempt(
+                            session_id=session_id,
+                            store=store,
+                            handle=handle,
+                            outcome=outcome,
+                            trace_span=task_span,
+                        ):
+                            yield child_event
+                        down = outcome.down
+                        if down is None:
+                            raise RuntimeError("remote attempt completed without down event")
+                        tracing.add_event(task_span, "down", attributes=down_trace_attributes(down))
+                        decision = ActorSupervisor.decide(policy=supervisor_policy, down=down, retry_count=retry_count)
+                        tracing.add_event(
+                            task_span,
+                            "supervisor.decision",
+                            attributes=supervisor_trace_attributes(
+                                action=decision.action,
+                                policy=decision.policy,
+                                retry_count=decision.retry_count,
+                            ),
+                        )
+                        if decision.action == "retry":
+                            retry_count += 1
+                            continue
 
-                result = self._task_child_result(
-                    tool_use_id=tool_call.tool_use_id,
-                    agent=agent,
-                    child_session_id=handle.child_session_id,
-                    child_final_text=outcome.child_final_text,
-                    child_stop_reason=outcome.child_stop_reason,
-                    dispatch_mode="k3s",
-                    down=down,
-                    supervisor=decision,
-                    target_node=handle.target_node,
-                    git_revision=handle.git_revision,
-                    worker_execution_id=handle.worker_execution_id,
-                    execution_id=handle.execution_id,
-                )
-                store.append_event(session_id, result)
-                yield result
-                return
+                        result = self._task_child_result(
+                            tool_use_id=tool_call.tool_use_id,
+                            agent=agent,
+                            child_session_id=handle.child_session_id,
+                            child_final_text=outcome.child_final_text,
+                            child_stop_reason=outcome.child_stop_reason,
+                            dispatch_mode="k3s",
+                            down=down,
+                            supervisor=decision,
+                            target_node=handle.target_node,
+                            git_revision=handle.git_revision,
+                            worker_execution_id=handle.worker_execution_id,
+                            execution_id=handle.execution_id,
+                        )
+                        store.append_event(session_id, result)
+                        yield result
+                        return
+                finally:
+                    tracing.end_span(task_span)
 
         execution_id = uuid.uuid4().hex
         child_session_id = store.create_session(
@@ -522,46 +594,72 @@ class TaskToolMixin:
 
         from .agent_runtime import AgentRuntime
 
-        child_runtime = AgentRuntime(child_options, agent_name=agent, parent_tool_use_id=tool_call.tool_use_id)
-        combined_prompt = definition.prompt + "\n\n" + task_prompt
-        transport = self._get_local_actor_transport()
-        handle = await transport.spawn(
-            ActorSpawnSpec(
+        task_span = tracing.start_span(
+            "oa.task.execution",
+            attributes=actor_execution_attributes(
                 execution_id=execution_id,
-                parent_actor_id=self._agent_name or "host",
-                child_actor_id=f"{agent}/{execution_id}",
+                actor_id=self._agent_name or "host",
                 agent_name=agent,
                 dispatch_mode="local",
-                child_session_id=child_session_id,
-                run=lambda _control_messages: child_runtime.query(combined_prompt),
-            )
+                transport_kind="local",
+            ),
         )
+        try:
+            with tracing.use_span(task_span):
+                child_runtime = AgentRuntime(child_options, agent_name=agent, parent_tool_use_id=tool_call.tool_use_id)
+                combined_prompt = definition.prompt + "\n\n" + task_prompt
+                transport = self._get_local_actor_transport()
+                tracing.add_event(task_span, "spawn", attributes={"oa.execution.id": execution_id})
+                handle = await transport.spawn(
+                    ActorSpawnSpec(
+                        execution_id=execution_id,
+                        parent_actor_id=self._agent_name or "host",
+                        child_actor_id=f"{agent}/{execution_id}",
+                        agent_name=agent,
+                        dispatch_mode="local",
+                        child_session_id=child_session_id,
+                        run=lambda _control_messages: child_runtime.query(combined_prompt),
+                    )
+                )
 
-        outcome = _AttemptOutcome()
-        async for child_event in self._iter_local_attempt(
-            session_id=session_id,
-            store=store,
-            transport=transport,
-            handle=handle,
-            outcome=outcome,
-        ):
-            yield child_event
-        down = outcome.down
-        if down is None:
-            raise RuntimeError("local attempt completed without down event")
-        if outcome.abort_consumed:
-            self._clear_abort_event()
-        decision = ActorSupervisor.decide(policy=supervisor_policy, down=down, retry_count=0)
-        result = self._task_child_result(
-            tool_use_id=tool_call.tool_use_id,
-            agent=agent,
-            child_session_id=child_session_id,
-            child_final_text=outcome.child_final_text,
-            child_stop_reason=outcome.child_stop_reason,
-            dispatch_mode="local",
-            down=down,
-            supervisor=decision,
-            execution_id=execution_id,
-        )
-        store.append_event(session_id, result)
-        yield result
+                outcome = _AttemptOutcome()
+                async for child_event in self._iter_local_attempt(
+                    session_id=session_id,
+                    store=store,
+                    transport=transport,
+                    handle=handle,
+                    outcome=outcome,
+                    trace_span=task_span,
+                ):
+                    yield child_event
+                down = outcome.down
+                if down is None:
+                    raise RuntimeError("local attempt completed without down event")
+                if outcome.abort_consumed:
+                    self._clear_abort_event()
+                tracing.add_event(task_span, "down", attributes=down_trace_attributes(down))
+                decision = ActorSupervisor.decide(policy=supervisor_policy, down=down, retry_count=0)
+                tracing.add_event(
+                    task_span,
+                    "supervisor.decision",
+                    attributes=supervisor_trace_attributes(
+                        action=decision.action,
+                        policy=decision.policy,
+                        retry_count=decision.retry_count,
+                    ),
+                )
+                result = self._task_child_result(
+                    tool_use_id=tool_call.tool_use_id,
+                    agent=agent,
+                    child_session_id=child_session_id,
+                    child_final_text=outcome.child_final_text,
+                    child_stop_reason=outcome.child_stop_reason,
+                    dispatch_mode="local",
+                    down=down,
+                    supervisor=decision,
+                    execution_id=execution_id,
+                )
+                store.append_event(session_id, result)
+                yield result
+        finally:
+            tracing.end_span(task_span)

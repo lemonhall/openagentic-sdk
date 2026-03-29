@@ -10,6 +10,7 @@ from .actor_local_transport import LocalActorTransport
 from .actor_mailbox import ActorMailboxStore
 from .actor_protocol import ActorEnvelope
 from .actor_registry import ActorExecutionRegistry
+from .actor_tracing import ensure_actor_tracing
 from .actor_transport import ActorSpawnSpec
 from .readonly_policy import build_remote_allowed_tools
 from .remote_types import RemoteTaskDispatchHandle, RemoteTaskRequest
@@ -24,6 +25,7 @@ class InProcessRemoteTaskWorker:
 
     async def dispatch(self, request: RemoteTaskRequest) -> RemoteTaskDispatchHandle:
         execution_id = request.worker_execution_id or uuid.uuid4().hex
+        tracing = ensure_actor_tracing(self.base_options)
         child_session_id = self.session_store.create_session(
             metadata=build_child_session_metadata(
                 parent_session_id=request.parent_session_id,
@@ -93,7 +95,7 @@ class InProcessRemoteTaskWorker:
 
             registry = ActorExecutionRegistry()
             mailbox_store = ActorMailboxStore()
-            transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store)
+            transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store, tracing=tracing)
             handle = await transport.spawn(
                 ActorSpawnSpec(
                     execution_id=execution_id,
@@ -103,6 +105,8 @@ class InProcessRemoteTaskWorker:
                     dispatch_mode=request.definition.executor.kind,
                     child_session_id=child_session_id,
                     run=lambda _control_messages: child_runtime.query(combined_prompt),
+                    trace_context=request.trace_context,
+                    trace_links=(request.trace_context,) if request.trace_context else (),
                 )
             )
             actor_state["transport"] = transport

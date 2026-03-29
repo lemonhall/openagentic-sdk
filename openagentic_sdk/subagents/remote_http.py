@@ -23,6 +23,7 @@ from ..serialization import event_to_dict
 from ..sessions.store import FileSessionStore
 from .actor_lifecycle import ActorDownEvent, classify_remote_exception_down
 from .actor_protocol import ActorEnvelope
+from .actor_tracing import ActorTracing, actor_execution_attributes, down_trace_attributes, envelope_trace_attributes
 from .remote_dispatch import resolve_git_head_only
 from .remote_types import RemoteTaskDispatchHandle, RemoteTaskRequest
 from .remote_worker import InProcessRemoteTaskWorker
@@ -81,77 +82,122 @@ class _ServerExecutionState:
 
 
 class HttpRemoteActorTransport:
-    def __init__(self, *, base_url: str, timeout_s: float = 60.0) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_s: float = 60.0,
+        tracing: ActorTracing | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
+        self._tracing = tracing or ActorTracing(service_name="openagentic-sdk")
 
     async def spawn(self, request: RemoteTaskRequest) -> RemoteTaskDispatchHandle:
+        transport_span = self._tracing.start_span(
+            "oa.actor.transport",
+            attributes=actor_execution_attributes(
+                execution_id=request.worker_execution_id,
+                actor_id=request.agent_name,
+                agent_name=request.agent_name,
+                dispatch_mode=request.definition.executor.kind,
+                transport_kind="http",
+            ),
+        )
         payload = _request_to_dict(request)
-        response = await self._open_json_post(path="/dispatch", payload=payload)
-        child_session_id = response.headers.get("X-OA-Child-Session-ID") or ""
-        target_node = response.headers.get("X-OA-Target-Node") or ""
-        git_revision = response.headers.get("X-OA-Git-Revision") or ""
-        worker_execution_id = response.headers.get("X-OA-Execution-ID") or response.headers.get("X-OA-Worker-Execution-ID") or None
-        if not child_session_id or not target_node or not git_revision:
-            response.close()
-            raise RuntimeError("Remote actor dispatch returned incomplete metadata headers")
-        _disable_response_read_timeout(response)
-        execution_id = worker_execution_id or child_session_id
-        acked_heads: dict[str, int] = {}
-        close_sent = False
-
-        async def _envelopes():
-            seen_message_ids: set[str] = set()
-            current_response = response
-            stalled_reconnects = 0
-            while True:
-                saw_progress = False
-                try:
-                    async for envelope in _read_envelopes_from_response(current_response):
-                        if envelope.message_id in seen_message_ids:
-                            continue
-                        seen_message_ids.add(envelope.message_id)
-                        saw_progress = True
-                        yield envelope
-                        if envelope.kind == "down":
-                            return
-                finally:
-                    current_response.close()
-
-                stalled_reconnects = 0 if saw_progress else stalled_reconnects + 1
-                if stalled_reconnects > 2:
-                    raise ConnectionError("remote actor stream ended without down")
-                current_response = await self._open_stream(
+        try:
+            response = await self._open_json_post(path="/dispatch", payload=payload)
+            child_session_id = response.headers.get("X-OA-Child-Session-ID") or ""
+            target_node = response.headers.get("X-OA-Target-Node") or ""
+            git_revision = response.headers.get("X-OA-Git-Revision") or ""
+            worker_execution_id = response.headers.get("X-OA-Execution-ID") or response.headers.get("X-OA-Worker-Execution-ID") or None
+            if not child_session_id or not target_node or not git_revision:
+                response.close()
+                raise RuntimeError("Remote actor dispatch returned incomplete metadata headers")
+            _disable_response_read_timeout(response)
+            execution_id = worker_execution_id or child_session_id
+            self._tracing.set_attributes(
+                transport_span,
+                actor_execution_attributes(
                     execution_id=execution_id,
-                    mailbox="child_events",
-                    after_seq=acked_heads.get("child_events", 0),
+                    actor_id=f"{request.agent_name}/{execution_id}",
+                    agent_name=request.agent_name,
+                    dispatch_mode=request.definition.executor.kind,
+                    transport_kind="http",
+                ),
+            )
+            self._tracing.add_event(transport_span, "spawn", attributes={"oa.execution.id": execution_id})
+            acked_heads: dict[str, int] = {}
+            close_sent = False
+
+            async def _envelopes():
+                seen_message_ids: set[str] = set()
+                current_response = response
+                stalled_reconnects = 0
+                while True:
+                    saw_progress = False
+                    try:
+                        async for envelope in _read_envelopes_from_response(current_response):
+                            if envelope.message_id in seen_message_ids:
+                                continue
+                            seen_message_ids.add(envelope.message_id)
+                            saw_progress = True
+                            self._tracing.add_event(transport_span, "receive", attributes=envelope_trace_attributes(envelope))
+                            if envelope.kind == "down" and isinstance(envelope.payload, Mapping):
+                                self._tracing.add_event(
+                                    transport_span,
+                                    "down",
+                                    attributes=down_trace_attributes(ActorDownEvent.from_payload(envelope.payload)),
+                                )
+                            yield envelope
+                            if envelope.kind == "down":
+                                return
+                    finally:
+                        current_response.close()
+
+                    stalled_reconnects = 0 if saw_progress else stalled_reconnects + 1
+                    if stalled_reconnects > 2:
+                        raise ConnectionError("remote actor stream ended without down")
+                    self._tracing.add_event(
+                        transport_span,
+                        "replay",
+                        attributes={
+                            "oa.execution.id": execution_id,
+                            "oa.mailbox": "child_events",
+                            "oa.after.seq": acked_heads.get("child_events", 0),
+                        },
+                    )
+                    current_response = await self._open_stream(
+                        execution_id=execution_id,
+                        mailbox="child_events",
+                        after_seq=acked_heads.get("child_events", 0),
+                    )
+
+            async def _abort() -> None:
+                self._tracing.add_event(transport_span, "abort", attributes={"oa.execution.id": execution_id})
+                await self._open_json_post(
+                    path="/abort",
+                    payload={
+                        "execution_id": execution_id,
+                        "kind": "abort",
+                    },
+                    expect_json=False,
                 )
 
-        async def _abort() -> None:
-            await self._open_json_post(
-                path="/abort",
-                payload={
-                    "execution_id": execution_id,
-                    "kind": "abort",
-                },
-                expect_json=False,
-            )
+            async def _send(envelope: ActorEnvelope) -> None:
+                self._tracing.add_event(transport_span, "send", attributes=envelope_trace_attributes(envelope))
+                await self._open_json_post(
+                    path="/send",
+                    payload=envelope.to_dict(),
+                    expect_json=False,
+                )
 
-        async def _send(envelope: ActorEnvelope) -> None:
-            await self._open_json_post(
-                path="/send",
-                payload=envelope.to_dict(),
-                expect_json=False,
-            )
-
-        async def _ack(envelope: ActorEnvelope) -> None:
-            acked_seq = envelope.seq
-            mailbox = envelope.mailbox
-            if acked_heads.get(mailbox, 0) >= acked_seq:
-                return
-            await self._open_json_post(
-                path="/send",
-                payload=ActorEnvelope(
+            async def _ack(envelope: ActorEnvelope) -> None:
+                acked_seq = envelope.seq
+                mailbox = envelope.mailbox
+                if acked_heads.get(mailbox, 0) >= acked_seq:
+                    return
+                ack_envelope = ActorEnvelope(
                     protocol_version="v1",
                     message_id=uuid.uuid4().hex,
                     execution_id=execution_id,
@@ -162,36 +208,45 @@ class HttpRemoteActorTransport:
                     kind="ack",
                     payload={"acked_seq": acked_seq, "mailbox": mailbox},
                     ts=asyncio.get_running_loop().time(),
-                ).to_dict(),
-                expect_json=False,
-            )
-            acked_heads[mailbox] = acked_seq
+                )
+                await self._open_json_post(
+                    path="/send",
+                    payload=ack_envelope.to_dict(),
+                    expect_json=False,
+                )
+                self._tracing.add_event(transport_span, "ack", attributes=envelope_trace_attributes(ack_envelope))
+                acked_heads[mailbox] = acked_seq
 
-        async def _close() -> None:
-            nonlocal close_sent
-            if close_sent:
-                return
-            await self._open_json_post(
-                path="/close",
-                payload={
-                    "execution_id": execution_id,
-                    "kind": "close",
-                },
-                expect_json=False,
-            )
-            close_sent = True
+            async def _close() -> None:
+                nonlocal close_sent
+                if close_sent:
+                    return
+                await self._open_json_post(
+                    path="/close",
+                    payload={
+                        "execution_id": execution_id,
+                        "kind": "close",
+                    },
+                    expect_json=False,
+                )
+                self._tracing.add_event(transport_span, "close", attributes={"oa.execution.id": execution_id})
+                self._tracing.end_span(transport_span)
+                close_sent = True
 
-        return request.make_handle(
-            child_session_id=child_session_id,
-            target_node=target_node,
-            git_revision=git_revision,
-            worker_execution_id=worker_execution_id,
-            envelopes=_envelopes(),
-            sender=_send,
-            acker=_ack,
-            aborter=_abort,
-            closer=_close,
-        )
+            return request.make_handle(
+                child_session_id=child_session_id,
+                target_node=target_node,
+                git_revision=git_revision,
+                worker_execution_id=worker_execution_id,
+                envelopes=_envelopes(),
+                sender=_send,
+                acker=_ack,
+                aborter=_abort,
+                closer=_close,
+            )
+        except Exception:
+            self._tracing.end_span(transport_span)
+            raise
 
     def receive(self, handle: RemoteTaskDispatchHandle):
         if handle.envelopes is None:
@@ -199,11 +254,7 @@ class HttpRemoteActorTransport:
         return handle.envelopes
 
     async def send(self, handle: RemoteTaskDispatchHandle, envelope: ActorEnvelope) -> None:
-        await self._open_json_post(
-            path="/send",
-            payload=envelope.to_dict(),
-            expect_json=False,
-        )
+        await handle.send(envelope)
 
     async def abort(self, handle: RemoteTaskDispatchHandle) -> None:
         await handle.abort()
@@ -259,8 +310,21 @@ class HttpRemoteActorTransport:
 
 
 class HttpRemoteTaskDispatcher:
-    def __init__(self, *, base_url: str, timeout_s: float = 60.0) -> None:
-        self._actor_transport = HttpRemoteActorTransport(base_url=base_url, timeout_s=timeout_s)
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_s: float = 60.0,
+        tracing: ActorTracing | None = None,
+    ) -> None:
+        self._actor_transport = HttpRemoteActorTransport(base_url=base_url, timeout_s=timeout_s, tracing=tracing)
+
+    def bind_actor_tracing(self, tracing: ActorTracing) -> None:
+        self._actor_transport = HttpRemoteActorTransport(
+            base_url=self._actor_transport._base_url,
+            timeout_s=self._actor_transport._timeout_s,
+            tracing=tracing,
+        )
 
     async def dispatch(self, request: RemoteTaskRequest):
         return await self._actor_transport.spawn(request)
@@ -659,6 +723,7 @@ def _request_to_dict(request: RemoteTaskRequest) -> dict[str, Any]:
         "project_dir": request.project_dir,
         "git_revision": request.git_revision,
         "worker_execution_id": request.worker_execution_id,
+        "trace_context": dict(request.trace_context),
     }
 
 
@@ -673,6 +738,7 @@ def _request_from_dict(obj: Mapping[str, Any]) -> RemoteTaskRequest:
         project_dir=str(obj.get("project_dir") or "") or None,
         git_revision=str(obj.get("git_revision") or ""),
         worker_execution_id=(str(obj.get("worker_execution_id")) if isinstance(obj.get("worker_execution_id"), str) else None),
+        trace_context=_trace_context_from_dict(obj.get("trace_context")),
     )
 
 
@@ -778,6 +844,15 @@ def _provider_spec_from_dict(raw: Any) -> ResolvedRemoteProviderSpec | None:
         api_key=api_key,
         api_key_header=api_key_header if isinstance(api_key_header, str) and api_key_header else "authorization",
     )
+
+
+def _trace_context_from_dict(raw: Any) -> dict[str, str]:
+    obj = raw if isinstance(raw, Mapping) else {}
+    result: dict[str, str] = {}
+    for key, value in obj.items():
+        if isinstance(key, str) and isinstance(value, str):
+            result[key] = value
+    return result
 
 
 def _disable_response_read_timeout(response: Any) -> None:

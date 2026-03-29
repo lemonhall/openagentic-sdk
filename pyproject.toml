@@ -16,6 +16,10 @@ classifiers = [
 ]
 dependencies = [
   "prompt_toolkit>=3.0.52",
+  "opentelemetry-api>=1.0.0,<2",
+  "opentelemetry-sdk>=1.0.0,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.0.0,<2",
+  "protobuf<6",
 ]
 
 [project.scripts]

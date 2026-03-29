@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import unittest
 from pathlib import Path
@@ -6,6 +8,7 @@ from tempfile import TemporaryDirectory
 from openagentic_sdk.options import AgentDefinition, OpenAgenticOptions
 from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.providers.base import ModelOutput, ToolCall
+from openagentic_sdk.runtime_core.agent_runtime import AgentRuntime
 from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.tools.registry import ToolRegistry
 
@@ -176,6 +179,89 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
                 if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
             )
             self.assertNotEqual(result.session_id, task_result.output["child_session_id"])
+
+    async def test_local_task_records_execution_metadata(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+
+            options = OpenAgenticOptions(
+                provider=TaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_DEF: do the work",
+                        tools=(),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for e in openagentic_sdk.query(prompt="PARENT: delegate", options=options):
+                events.append(e)
+
+            task_result = next(
+                event
+                for event in events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            output = task_result.output
+            child_meta = store.read_metadata(output["child_session_id"])
+
+            self.assertEqual(output["dispatch_mode"], "local")
+            self.assertTrue(isinstance(output.get("execution_id"), str) and output["execution_id"])
+            self.assertEqual(child_meta.get("dispatch_mode"), "local")
+            self.assertEqual(child_meta.get("execution_id"), output["execution_id"])
+
+    async def test_runtime_registry_tracks_local_execution(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+
+            options = OpenAgenticOptions(
+                provider=TaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_DEF: do the work",
+                        tools=(),
+                    )
+                },
+            )
+
+            runtime = AgentRuntime(options)
+            events = []
+            async for event in runtime.query("PARENT: delegate"):
+                events.append(event)
+
+            task_result = next(
+                event
+                for event in events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            child_events = [event for event in events if getattr(event, "agent_name", None) == "worker"]
+            execution_id = task_result.output["execution_id"]
+            record = runtime.actor_registry.get(execution_id)
+
+            self.assertEqual(record.execution_id, execution_id)
+            self.assertEqual(record.agent_name, "worker")
+            self.assertEqual(record.dispatch_mode, "local")
+            self.assertEqual(record.state, "exited")
+            self.assertEqual(record.mailbox_heads["child_events"], len(child_events))
 
 
 if __name__ == "__main__":

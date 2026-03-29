@@ -132,5 +132,7 @@
 
 - Date: 2026-03-29
 - Env: Windows 11 + PowerShell 7.x
-- Status: planned；not yet executed
-
+- Verification:
+  - `python -m unittest -q tests.test_actor_protocol tests.test_actor_mailbox_store tests.test_actor_local_transport tests.test_subagent_task`
+  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_protocol.py tests/test_actor_mailbox_store.py tests/test_actor_local_transport.py tests/test_subagent_task.py --config ruff.toml`
+- Status: implemented；verified locally

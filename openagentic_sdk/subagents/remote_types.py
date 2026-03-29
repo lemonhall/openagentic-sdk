@@ -14,6 +14,10 @@ class RemoteTaskDispatchHandle:
     worker_execution_id: str | None
     events: AsyncIterator[Any]
 
+    @property
+    def execution_id(self) -> str | None:
+        return self.worker_execution_id
+
 
 @dataclass(frozen=True, slots=True)
 class RemoteTaskRequest:

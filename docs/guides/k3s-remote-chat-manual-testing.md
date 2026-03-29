@@ -29,6 +29,9 @@ http://127.0.0.1:16686
 
 - `oa chat --k3d-real` 会自己管理 chat host 的 `port-forward`
 - `Jaeger` 走固定地址 `http://127.0.0.1:16686`
+- 打开 Jaeger 后，`real-model cluster` 主要看两个 service：
+  - `oa-cluster-chat-host-real`
+  - `oa-remote-worker-real`
 - `oa chat --remote-host ...` 只保留给 debug / 手工诊断，不作为默认入口
 
 如果 `http://127.0.0.1:16686` 打不开，先启动固定端口转发：

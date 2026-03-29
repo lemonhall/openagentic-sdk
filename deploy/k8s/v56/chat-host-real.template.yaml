@@ -24,6 +24,16 @@ spec:
               value: /workspace/repo
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
+            - name: OTEL_SERVICE_NAME
+              value: "oa-cluster-chat-host-real"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.openagentic-v56.svc.cluster.local:4318"
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: "http://otel-collector.openagentic-v56.svc.cluster.local:4318/v1/traces"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: OA_TRACE_ROLE
+              value: "host"
             - name: OA_HOST_NODE_NAME
               valueFrom:
                 fieldRef:
@@ -33,7 +43,10 @@ __OA_REMOTE_ENV_BLOCK__
             - sh
             - -lc
             - >
-              python -u -m openagentic_sdk.server.cluster_chat_host
+              set -eu;
+              python -m pip install -q --no-cache-dir "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
+              export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_HOST_NODE_NAME},oa.role=host,oa.namespace=openagentic-v56-real";
+              exec python -u -m openagentic_sdk.server.cluster_chat_host
               --host 0.0.0.0
               --port 8766
               --repo-root /workspace/repo

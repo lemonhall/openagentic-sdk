@@ -34,4 +34,5 @@ class AgentRuntime(
             registry=self.actor_registry,
             mailbox_store=self.actor_mailbox_store,
         )
+        options.runtime_state.bind_runtime(self)
 

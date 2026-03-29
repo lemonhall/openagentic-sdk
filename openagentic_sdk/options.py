@@ -74,6 +74,18 @@ class CompactionOptions:
     min_prune_tokens: int = 20_000
 
 
+@dataclass(slots=True)
+class OpenAgenticRuntimeState:
+    runtime: Any | None = None
+    actor_registry: Any | None = None
+    actor_mailbox_store: Any | None = None
+
+    def bind_runtime(self, runtime: Any) -> None:
+        self.runtime = runtime
+        self.actor_registry = getattr(runtime, "actor_registry", None)
+        self.actor_mailbox_store = getattr(runtime, "actor_mailbox_store", None)
+
+
 @dataclass(frozen=True, slots=True)
 class OpenAgenticOptions:
     provider: Provider
@@ -118,6 +130,7 @@ class OpenAgenticOptions:
     remote_task_dispatcher: Any | None = None
     remote_chat_base_url: str | None = None
     remote_chat_timeout_s: float = 10.0
+    runtime_state: OpenAgenticRuntimeState = field(default_factory=OpenAgenticRuntimeState)
 
     # MCP placeholders (not implemented yet)
     mcp_servers: Mapping[str, Any] | None = None

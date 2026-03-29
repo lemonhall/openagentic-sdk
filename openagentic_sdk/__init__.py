@@ -15,13 +15,14 @@ from .messages import (
     ToolUseBlock,
     UserMessage,
 )
-from .options import OpenAgenticOptions
+from .options import OpenAgenticOptions, OpenAgenticRuntimeState
 
 __all__ = [
     "AssistantMessage",
     "ContentBlock",
     "Message",
     "OpenAgenticOptions",
+    "OpenAgenticRuntimeState",
     "ResultMessage",
     "StreamEvent",
     "SystemMessage",

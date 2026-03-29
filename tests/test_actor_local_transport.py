@@ -52,6 +52,7 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
         async for envelope in transport.receive(handle):
             envelopes.append(envelope)
 
+        self.assertEqual(registry.get("exec-1").state, "exited")
         await transport.close(handle)
 
         self.assertEqual(handle.execution_id, "exec-1")
@@ -63,7 +64,9 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_from_dict(envelopes[1].payload["event"]).final_text, "child ok")
         self.assertEqual(mailbox_store.head_seq("exec-1", "child_events"), 2)
         self.assertEqual(registry.get("exec-1").mailbox_heads["child_events"], 2)
-        self.assertEqual(registry.get("exec-1").state, "exited")
+        self.assertEqual(registry.get("exec-1").state, "closed")
+        with self.assertRaises(KeyError):
+            await anext(transport.receive(handle))
 
     async def test_send_delivers_control_envelope_to_child(self) -> None:
         from openagentic_sdk.subagents.actor_local_transport import LocalActorTransport
@@ -119,6 +122,7 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mailbox_store.head_seq("exec-2", "control"), 1)
         self.assertEqual(registry.get("exec-2").mailbox_heads["control"], 1)
+        self.assertEqual(registry.get("exec-2").state, "closed")
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(event_from_dict(envelopes[0].payload["event"]).text, "got noop")
 

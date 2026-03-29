@@ -260,8 +260,48 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.execution_id, execution_id)
             self.assertEqual(record.agent_name, "worker")
             self.assertEqual(record.dispatch_mode, "local")
-            self.assertEqual(record.state, "exited")
+            self.assertEqual(record.state, "closed")
             self.assertEqual(record.mailbox_heads["child_events"], len(child_events))
+
+    async def test_api_query_exposes_runtime_state_for_local_execution(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+
+            options = OpenAgenticOptions(
+                provider=TaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_DEF: do the work",
+                        tools=(),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+            async for event in openagentic_sdk.query(prompt="PARENT: delegate", options=options):
+                events.append(event)
+
+            task_result = next(
+                event
+                for event in events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            execution_id = task_result.output["execution_id"]
+
+            self.assertIsNotNone(options.runtime_state.runtime)
+            self.assertIs(options.runtime_state.actor_registry, options.runtime_state.runtime.actor_registry)
+            self.assertIs(options.runtime_state.actor_mailbox_store, options.runtime_state.runtime.actor_mailbox_store)
+            self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "closed")
 
 
 if __name__ == "__main__":

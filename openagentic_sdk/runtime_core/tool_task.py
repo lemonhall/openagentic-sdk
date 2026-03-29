@@ -30,6 +30,9 @@ class TaskToolMixin:
         self.actor_registry = registry
         self.actor_mailbox_store = mailbox_store
         self._local_actor_transport = transport
+        runtime_state = getattr(getattr(self, "_options", None), "runtime_state", None)
+        if runtime_state is not None:
+            runtime_state.bind_runtime(self)
         return transport
 
     def _task_child_result(

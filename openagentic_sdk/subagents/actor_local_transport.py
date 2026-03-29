@@ -80,7 +80,13 @@ class LocalActorTransport:
         state = self._executions.get(handle.execution_id)
         if state is None:
             return
-        await asyncio.shield(state.task)
+        try:
+            await asyncio.shield(state.task)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._executions.pop(handle.execution_id, None)
+            self._registry.update_state(handle.execution_id, "closed")
 
     async def _run_child(
         self,

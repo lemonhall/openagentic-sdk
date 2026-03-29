@@ -37,6 +37,7 @@
 - M1 的 mailbox store 可以先落在内存 + append-only event 结构，但语义上必须明确有 inbox / outbox / seq。
 - 兼容层要放在 host runtime / `Task` 执行层，而不是让 CLI / trace 先知道 actor internals。
 - 本地 child runtime 现在直接是 generator 风格；M1 要把它包进 local transport，而不是继续裸连 generator。
+- `openagentic_sdk.query()` / `run()` 这类顶层入口也必须保留 host-authoritative 可观测性；第一版通过显式的 `OpenAgenticOptions.runtime_state` 暴露 runtime / actor registry / mailbox store，而不是要求调用方自己直接 new `AgentRuntime`。
 
 ## Acceptance (DoD)
 
@@ -56,6 +57,9 @@
 - Create: `openagentic_sdk/subagents/actor_transport.py`
 - Create: `openagentic_sdk/subagents/actor_local_transport.py`
 - Modify: `openagentic_sdk/subagents/remote_types.py`
+- Modify: `openagentic_sdk/options.py`
+- Modify: `openagentic_sdk/__init__.py`
+- Modify: `openagentic_sdk/runtime_core/agent_runtime.py`
 - Modify: `openagentic_sdk/runtime_core/tool_task.py`
 - Modify: `tests/test_subagent_task.py`
 - Create: `tests/test_actor_protocol.py`
@@ -95,6 +99,7 @@
 - 本地 `Task` 仍能回流 child events
 - 最终 `tool.result` 仍保留 child session 信息
 - actor foundation 接入后，模型侧 `Task(agent=..., prompt=...)` 用法不变
+- 顶层 `openagentic_sdk.query()` / `run()` 入口仍能把 host runtime state 暴露给调用方，确保 execution registry 在不直接持有 `AgentRuntime` 时依然可查
 
 ## Steps
 

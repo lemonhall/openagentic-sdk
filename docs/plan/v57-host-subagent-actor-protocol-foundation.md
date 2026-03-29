@@ -46,7 +46,7 @@
 必须全部满足：
 
 1. `python -m unittest -q tests.test_actor_protocol tests.test_actor_mailbox_store tests.test_actor_local_transport tests.test_subagent_task`
-2. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_protocol.py tests/test_actor_mailbox_store.py tests/test_actor_local_transport.py tests/test_subagent_task.py --config ruff.toml`
+2. `ruff check openagentic_sdk/subagents openagentic_sdk/api.py openagentic_sdk/options.py openagentic_sdk/__init__.py openagentic_sdk/runtime_core/agent_runtime.py openagentic_sdk/runtime_core/tool_task.py tests/test_actor_protocol.py tests/test_actor_mailbox_store.py tests/test_actor_local_transport.py tests/test_subagent_task.py --config ruff.toml`
 3. 反作弊条款：
    - 不允许只新增 dataclass，却不让本地 `Task` 真正走 actor transport
    - 不允许 execution registry 只是日志输出，没有可查询状态
@@ -59,6 +59,7 @@
 - Create: `openagentic_sdk/subagents/actor_transport.py`
 - Create: `openagentic_sdk/subagents/actor_local_transport.py`
 - Modify: `openagentic_sdk/subagents/remote_types.py`
+- Modify: `openagentic_sdk/api.py`
 - Modify: `openagentic_sdk/options.py`
 - Modify: `openagentic_sdk/__init__.py`
 - Modify: `openagentic_sdk/runtime_core/agent_runtime.py`
@@ -83,8 +84,12 @@
 `tests.test_actor_mailbox_store` 至少覆盖：
 
 - 同一 mailbox 内按 `seq` 有序追加
-- duplicate `message_id` 不会被重复接收
+- store 层 duplicate `message_id` 会被忽略，不会重复入账
 - execution registry 能基于 `execution_id` 看到当前 mailbox head 与状态
+
+`tests.test_actor_local_transport` 额外负责证明：
+
+- transport 层不会把 duplicate `message_id` 再次投递给 child
 
 ### Contract C — local child 真正走 actor transport
 
@@ -101,7 +106,7 @@
 - 本地 `Task` 仍能回流 child events
 - 最终 `tool.result` 仍保留 child session 信息
 - actor foundation 接入后，模型侧 `Task(agent=..., prompt=...)` 用法不变
-- 顶层 `openagentic_sdk.query()` / `run()` 入口仍能把 host runtime state 暴露给调用方，确保 execution registry 在不直接持有 `AgentRuntime` 时依然可查
+- 顶层 `openagentic_sdk.query()` 与 `run()` 入口都仍能把 host runtime state 暴露给调用方，确保 execution registry 在不直接持有 `AgentRuntime` 时依然可查
 
 ## Steps
 
@@ -141,5 +146,5 @@
 - Env: Windows 11 + PowerShell 7.x
 - Verification:
   - `python -m unittest -q tests.test_actor_protocol tests.test_actor_mailbox_store tests.test_actor_local_transport tests.test_subagent_task`
-  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_protocol.py tests/test_actor_mailbox_store.py tests/test_actor_local_transport.py tests/test_subagent_task.py --config ruff.toml`
+  - `ruff check openagentic_sdk/subagents openagentic_sdk/api.py openagentic_sdk/options.py openagentic_sdk/__init__.py openagentic_sdk/runtime_core/agent_runtime.py openagentic_sdk/runtime_core/tool_task.py tests/test_actor_protocol.py tests/test_actor_mailbox_store.py tests/test_actor_local_transport.py tests/test_subagent_task.py --config ruff.toml`
 - Status: implemented；verified locally

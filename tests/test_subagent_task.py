@@ -303,6 +303,44 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertIs(options.runtime_state.actor_mailbox_store, options.runtime_state.runtime.actor_mailbox_store)
             self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "exited")
 
+    async def test_api_run_exposes_runtime_state_for_local_execution(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+
+            options = OpenAgenticOptions(
+                provider=TaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_DEF: do the work",
+                        tools=(),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            result = await openagentic_sdk.run(prompt="PARENT: delegate", options=options)
+
+            task_result = next(
+                event
+                for event in result.events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            execution_id = task_result.output["execution_id"]
+
+            self.assertIsNotNone(options.runtime_state.runtime)
+            self.assertIs(options.runtime_state.actor_registry, options.runtime_state.runtime.actor_registry)
+            self.assertIs(options.runtime_state.actor_mailbox_store, options.runtime_state.runtime.actor_mailbox_store)
+            self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "exited")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@
 
 1. `python -m unittest -q tests.test_actor_http_transport tests.test_actor_remote_replay tests.test_remote_http_transport tests.test_remote_task_dispatch tests.test_k3d_dispatcher`
 2. `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_actor_*.py\" -v"'`
-3. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
+3. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/e2e_remote_actor_host_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
 4. 反作弊条款：
    - 不允许 reconnect 后靠“重新跑一遍整个 child task”冒充 replay
    - 不允许 remote stream 断了以后只给一个通用 RuntimeError，而没有结构化 `down`
@@ -128,7 +128,7 @@
    - 跑到绿：`python -m unittest -v tests.test_actor_remote_replay tests.test_remote_http_transport`
 
 6. E2E Red / Green：k3d smoke
-   - 新增 `e2e_remote_actor_basic.py` 与 `e2e_remote_actor_reconnect.py`
+   - 新增 `e2e_remote_actor_basic.py`、`e2e_remote_actor_reconnect.py` 与 `e2e_remote_actor_host_reconnect.py`
    - 跑：
      - `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_actor_*.py\" -v"'`
 
@@ -143,7 +143,7 @@
 - Local verification:
   - `python -m unittest -q tests.test_actor_http_transport tests.test_actor_remote_replay tests.test_remote_http_transport tests.test_remote_task_dispatch tests.test_k3d_dispatcher`
   - `python -m unittest -q`
-  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
+  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/e2e_remote_actor_host_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
 - k3d e2e status:
   - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect e2e_k3d_tests.e2e_remote_actor_host_reconnect`
   - Result in current shell: skipped (`missing required tool: docker`)

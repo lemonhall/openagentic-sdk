@@ -2,7 +2,7 @@
 
 ## Goal
 
-把现有 remote HTTP worker 链路从“dispatch + NDJSON event stream”升级成 actor transport adapter，让远程 transport 也接入同一套 `execution_id / mailbox / seq / replay / down` 语义。
+把现有 remote HTTP worker 链路从“dispatch + NDJSON event stream”升级成 actor transport adapter；当前 M3 实现的真实边界是：远程 transport 接入 `execution_id / child_events / seq / replay / down` 语义，并补齐 `send / abort / close` 的 actor contract。
 
 ## PRD Trace
 
@@ -19,7 +19,7 @@
 
 - 把 remote HTTP transport 改造成 actor transport adapter
 - 让 remote transport 显式实现 `spawn / send / receive / abort / close`
-- 引入 remote replay / ack / reconnect contract
+- 引入 remote replay / reconnect contract（当前 slice 仅覆盖 `child_events` 单 mailbox）
 - 让 remote worker 对 child lifecycle 产出结构化 `down`
 - 保持外层 `Task` 兼容语义
 - 让 host abort remote child 时仍走结构化 `down`
@@ -33,9 +33,9 @@
 ## Implementation Notes
 
 - 现有 `RemoteTaskRequest` / `RemoteTaskDispatchHandle` 更像 RPC handle；M3 需要把它们重构成 actor transport 兼容对象，而不是继续堆字段。
-- remote replay 的主键必须是 `execution_id + mailbox + seq`。
-- ACK 语义应以 host 实际消费到的 mailbox cursor 为准，而不是 transport socket 读到了多少字节。
-- remote worker stream 中断后，host 不能丢失“已经收到多少、还缺多少、child 当前是否已结束”的认知。
+- 当前实现里的 replay cursor 是 `execution_id + after_seq`，默认只覆盖 `child_events` mailbox；尚未扩展成 mailbox 粒度 cursor。
+- 当前实现没有独立的显式 ACK envelope；cursor 在 envelope 被 transport 交付给上层迭代器后推进，还不是“host 持久化完成后再 ACK”的严格语义。
+- 当前实现已解决“远端 stream 断一下，transport client 不知道从哪里继续”的问题；但 k3d e2e 目前证明的是 worker transport replay，本轮还没有 host `Task` 路径的自动 reconnect smoke。
 - remote `send` 必须落到显式 `/send` actor endpoint，而不是继续把 control 语义塞进 ad-hoc query params 或隐藏副作用里。
 - remote abort 仍可保留独立 `/abort` 入口，但 host 侧 `Task` 必须和本地模式一样监听 `abort_event`，不能只在 local transport 生效。
 
@@ -82,17 +82,19 @@
 
 `tests.test_actor_remote_replay` 至少覆盖：
 
-- host 消费到某个 `seq` 后连接中断
+- transport client 消费到某个 `seq` 后连接中断
 - reconnect 后从下一个未确认 `seq` 继续
 - duplicate `message_id` 不会造成重复 child event
+- 当前合同只覆盖 `child_events` 单 mailbox，不覆盖多 mailbox cursor
 
-### Contract C — k3d smoke 验证远程断流恢复
+### Contract C — k3d smoke 验证 worker transport replay
 
 `e2e_remote_actor_reconnect.py` 至少覆盖：
 
-- 远程 worker stream 人工中断一次
-- host 仍收到结构化 `down` 或成功 replay
+- 客户端对远程 worker 的首个 stream 主动断连一次
+- 随后的 `/stream?execution_id=...&after_seq=...` 能继续 replay
 - 不出现乱序 / 重复 / 静默吞消息
+- 当前不覆盖 host `Task` 自动 reconnect / replay
 
 ## Steps
 
@@ -135,4 +137,8 @@
 - k3d e2e status:
   - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect`
   - Result in current shell: skipped (`missing required tool: docker`)
-- Status: implemented locally；k3d smoke/reconnect tests已补齐，待 docker-enabled 环境实跑
+- Remaining gaps vs broader v57 intent:
+  - replay 仍是 `child_events` 单 mailbox，而不是 mailbox 粒度 cursor
+  - ACK 仍是隐式消费 cursor，而不是显式 post-persist ACK
+  - k3d reconnect e2e 目前证明的是 worker transport replay，不是 host `Task` 自动 reconnect
+- Status: implemented locally as current M3 slice；k3d worker replay smoke 已补齐，待 docker-enabled 环境实跑

@@ -1,0 +1,66 @@
+/*
+Copyright (c) 2017 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.SpanDetail--divider {
+  background: var(--border-default);
+}
+
+/* openagentic v58 readability */
+.SpanDetail {
+  color: var(--text-primary);
+}
+
+.SpanDetail h2 {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.SpanDetail--debugInfo {
+  color: var(--text-primary);
+  display: block;
+  letter-spacing: 0.25px;
+  margin: 0.5em 0 -0.75em;
+  text-align: right;
+}
+
+.SpanDetail--debugLabel::before {
+  color: var(--text-secondary);
+  content: attr(data-label);
+  font-weight: 600;
+}
+
+.SpanDetail--debugValue {
+  background-color: inherit;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.SpanDetail--debugValue:hover {
+  color: var(--text-primary);
+}
+
+.AccordianWarnings {
+  background: var(--surface-tertiary);
+  border: 1px solid var(--border-default);
+  margin-bottom: 0.25rem;
+}
+
+.AccordianWarnings--header {
+  background: var(--ant-color-warning-bg);
+  padding: 0.25rem 0.5rem;
+}
+
+.AccordianWarnings--header:hover {
+  background: var(--ant-color-warning-bg-hover);
+}
+
+.AccordianWarnings--header.is-open {
+  border-bottom: 1px solid var(--border-default);
+}
+
+.AccordianWarnings--label {
+  color: var(--feedback-warning);
+}

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .base import Tool, ToolContext
+from ._web_proxy import urlopen_with_proxy
 
 SearchTransport = Callable[[str, Mapping[str, str], Mapping[str, Any]], Mapping[str, Any]]
 
@@ -20,7 +21,7 @@ def _default_search_transport(url: str, headers: Mapping[str, str], payload: Map
     req = urllib.request.Request(url, data=data, method="POST")
     for k, v in headers.items():
         req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urlopen_with_proxy(req, timeout=60) as resp:
         raw = resp.read()
     return json.loads(raw.decode("utf-8"))
 
@@ -68,7 +69,7 @@ def _duckduckgo_search(query: str, *, max_results: int, allowed_set: set[str], b
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urlopen_with_proxy(req, timeout=60) as resp:
             raw = resp.read()
     except (urllib.error.URLError, urllib.error.HTTPError):
         return []

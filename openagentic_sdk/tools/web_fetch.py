@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .base import Tool, ToolContext
+from ._web_proxy import urlopen_with_proxy
 
 LegacyFetchTransport = Callable[[str, Mapping[str, str]], tuple[int, Mapping[str, str], bytes]]
 ExtractTransport = Callable[[str, Mapping[str, str], Mapping[str, Any]], Mapping[str, Any]]
@@ -22,7 +23,7 @@ def _default_extract_transport(url: str, headers: Mapping[str, str], payload: Ma
     req = urllib.request.Request(url, data=data, method="POST")
     for k, v in headers.items():
         req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urlopen_with_proxy(req, timeout=60) as resp:
         raw = resp.read()
     return json.loads(raw.decode("utf-8"))
 

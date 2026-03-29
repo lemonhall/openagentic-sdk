@@ -99,6 +99,13 @@ curl.exe http://127.0.0.1:18776/health
 - 仅修改 `openagentic.remote.json` / `.openagentic.remote.env` 时，不必删整个 cluster；
 - 但如果你要让当前 local k3d 节点看到新的 SDK 代码提交，还是要刷新 mirror，最稳的方式仍然是重新跑一次 k3d bring-up。
 
+补充：
+
+- 从这版开始，authoritative mirror 不再放在 `/tmp`，而是放在 `~/.cache/openagentic-k3d/`；
+- `oa chat --k3d-real` 在 WSL2 重启后，如果发现 k3d API 还没恢复，会自动尝试 `k3d cluster start v56-openagentic`；
+- real host / worker 启动时不再依赖公网 `pip install`，而是从 authoritative mirror 里的 `.openagentic-wheelhouse` 本地安装运行时依赖；
+- `.openagentic.remote.env` 里的代理配置现在只会被映射成 `OPENAGENTIC_WEB_*`，仅供 `WebSearch/WebFetch` 使用，不再全局污染 provider 请求。
+
 ## 2. 需要哪些文件
 
 仓库里提供了两个示例文件：
@@ -173,6 +180,11 @@ TAVILY_API_KEY=...
 
 如果你在 Windows 11 本机用 k3d，并且希望 real cluster 内的 `WebSearch` / `WebFetch` 能借助本机代理出网，先启动一个 WSL host relay，再把 proxy env 写进 `.openagentic.remote.env`。
 
+注意：
+
+- relay 现在只影响 Web 工具；
+- 普通聊天、writer、以及不依赖外网检索的 remote subagent，不再依赖 relay 才能活着。
+
 启动 relay：
 
 ```powershell
@@ -198,6 +210,8 @@ NO_PROXY=127.0.0.1,localhost,.svc,.cluster.local
 - 现在 `WebFetch` 在 pod 内直接走 Tavily Extract，不再先做一层本地直抓；
 - 所以如果你希望 `research` 的网页抓取可用，`TAVILY_API_KEY` 必须写进 `.openagentic.remote.env`；
 - `OPENAGENTIC_WEBFETCH_TAVILY_EXTRACT_DEPTH=advanced` 可以保留，用于更偏重 JS 页面提取。
+- 这些 proxy 值现在会在渲染 manifest 时转换成 `OPENAGENTIC_WEB_HTTP_PROXY` / `OPENAGENTIC_WEB_HTTPS_PROXY` / `OPENAGENTIC_WEB_NO_PROXY`；
+- 也就是说，`rightcode` provider 不会再因为 relay 不在就被错误代理。
 
 说明：
 

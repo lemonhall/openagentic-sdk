@@ -44,7 +44,7 @@ __OA_REMOTE_ENV_BLOCK__
             - -lc
             - >
               set -eu;
-              python -m pip install -q --no-cache-dir "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
+              python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
               export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_HOST_NODE_NAME},oa.role=host,oa.namespace=openagentic-v56-real";
               exec python -u -m openagentic_sdk.server.cluster_chat_host
               --host 0.0.0.0

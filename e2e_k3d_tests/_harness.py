@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -73,7 +74,9 @@ def ensure_cluster_ready() -> None:
     if not _cluster_exists():
         rendered = _render_cluster_config(desired_mirror)
         _run(["k3d", "cluster", "create", "--config", str(rendered)])
-        _cluster_head_path().write_text(desired_head, encoding="utf-8")
+        cluster_head_path = _cluster_head_path()
+        cluster_head_path.parent.mkdir(parents=True, exist_ok=True)
+        cluster_head_path.write_text(desired_head, encoding="utf-8")
 
     _preload_node_images()
     _run(["kubectl", "config", "use-context", f"k3d-{CLUSTER_NAME}"])
@@ -427,13 +430,21 @@ def ensure_git_mirror() -> Path:
         return mirror
     if mirror.exists():
         shutil.rmtree(mirror)
+    mirror.parent.mkdir(parents=True, exist_ok=True)
     _run(["git", "clone", "--no-hardlinks", "--no-checkout", str(repo_root()), str(mirror)])
     _run(["git", "-C", str(mirror), "checkout", "--force", current_git_head()])
     return mirror
 
 
+def _k3d_state_root() -> Path:
+    override = os.environ.get("OA_K3D_STATE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".cache" / "openagentic-k3d"
+
+
 def _mirror_root_for_head(head: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"openagentic-v56-mirror-{head[:12]}"
+    return _k3d_state_root() / "mirrors" / f"openagentic-v56-mirror-{head[:12]}"
 
 
 def _cluster_head() -> str:
@@ -444,7 +455,7 @@ def _cluster_head() -> str:
 
 
 def _cluster_head_path() -> Path:
-    return Path(tempfile.gettempdir()) / "openagentic-v56-cluster-head.txt"
+    return _k3d_state_root() / "state" / "openagentic-v56-cluster-head.txt"
 
 
 def _pick_free_local_port() -> int:

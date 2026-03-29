@@ -51,7 +51,7 @@ __OA_REMOTE_ENV_BLOCK__
             - -lc
             - >
               set -eu;
-              python -m pip install -q --no-cache-dir "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
+              python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
               export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker,oa.namespace=openagentic-v56-real";
               exec python -u -m openagentic_sdk.subagents.remote_http_worker_server
               --host 0.0.0.0
@@ -140,7 +140,7 @@ __OA_REMOTE_ENV_BLOCK__
             - -lc
             - >
               set -eu;
-              python -m pip install -q --no-cache-dir "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
+              python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
               export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker,oa.namespace=openagentic-v56-real";
               exec python -u -m openagentic_sdk.subagents.remote_http_worker_server
               --host 0.0.0.0

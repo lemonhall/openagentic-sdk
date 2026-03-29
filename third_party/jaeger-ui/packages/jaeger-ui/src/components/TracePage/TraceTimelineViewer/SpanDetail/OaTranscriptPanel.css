@@ -1,0 +1,124 @@
+/*
+Copyright (c) 2026 OpenAgentic Contributors.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.OaTranscriptPanel {
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  margin-top: 0.75rem;
+  padding: 0.875rem 1rem;
+}
+
+.OaTranscriptPanel--header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.OaTranscriptPanel--title {
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.OaTranscriptPanel--subtitle {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.2rem 0 0;
+}
+
+.OaTranscriptPanel--meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.OaTranscriptPanel--metaItem {
+  background: var(--surface-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  padding: 0.18rem 0.55rem;
+}
+
+.OaTranscriptPanel--state {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.OaTranscriptPanel--error {
+  background: var(--ant-color-error-bg);
+  border: 1px solid var(--ant-color-error-border);
+  border-radius: 8px;
+  color: var(--ant-color-error-text);
+  padding: 0.75rem;
+}
+
+.OaTranscriptPanel--errorCode {
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+  text-transform: none;
+}
+
+.OaTranscriptPanel--errorDetail {
+  font-size: 0.9rem;
+}
+
+.OaTranscriptPanel--messages {
+  display: grid;
+  gap: 0.65rem;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.OaTranscriptPanel--message {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.OaTranscriptPanel--message.is-user {
+  background: var(--surface-tertiary);
+}
+
+.OaTranscriptPanel--message.is-assistant {
+  background: var(--surface-primary);
+}
+
+.OaTranscriptPanel--messageMeta {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.OaTranscriptPanel--role {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.OaTranscriptPanel--seq {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.OaTranscriptPanel--text {
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -17,7 +17,9 @@ v58 解决的是 v57 之后一个很自然的缺口：我们已经能在 Jaeger 
 - **M1: Transcript Refs And Read APIs**
   - Plan: `docs/plan/v58-jaeger-transcript-drilldown.md`
   - PRD: `docs/prd/PRD-0058-jaeger-transcript-drilldown-v58.md`
-  - Status: planned
+  - DoD（命令证据）：
+    - `python -m unittest -q tests.test_actor_tracing tests.test_session_transcript_view tests.test_cluster_chat_transcript_api tests.test_remote_worker_transcript_api`
+  - Status: done（verified locally 2026-03-29）
 
 - **M2: Jaeger Drilldown UI**
   - Plan: `docs/plan/v58-jaeger-transcript-drilldown.md`
@@ -30,9 +32,9 @@ v58 解决的是 v57 之后一个很自然的缺口：我们已经能在 Jaeger 
 
 ## Traceability Matrix
 
-- REQ-0058-001 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_actor_tracing` → pending
-- REQ-0058-002 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_cluster_chat_transcript_api` + `tests.test_session_transcript_view` → pending
-- REQ-0058-003 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_remote_worker_transcript_api` → pending
+- REQ-0058-001 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_actor_tracing` → executed locally 2026-03-29
+- REQ-0058-002 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_cluster_chat_transcript_api` + `tests.test_session_transcript_view` → executed locally 2026-03-29
+- REQ-0058-003 → `docs/plan/v58-jaeger-transcript-drilldown.md` → `tests.test_remote_worker_transcript_api` → executed locally 2026-03-29
 - REQ-0058-004 → `docs/plan/v58-jaeger-transcript-drilldown.md` → hand verification in Jaeger UI → pending
 - REQ-0058-005 → `docs/plan/v58-jaeger-transcript-drilldown.md` → UI behavior verification → pending
 - REQ-0058-006 → `docs/plan/v58-jaeger-transcript-drilldown.md` → transcript panel hand verification → pending

@@ -463,6 +463,9 @@ class TaskToolMixin:
                         agent_name=agent,
                         dispatch_mode="k3s",
                         transport_kind="http",
+                        session_id=session_id,
+                        parent_session_id=session_id,
+                        target_node=definition.executor.node_name,
                     ),
                 )
                 try:
@@ -511,6 +514,20 @@ class TaskToolMixin:
                             yield result
                             return
 
+                        tracing.set_attributes(
+                            task_span,
+                            actor_execution_attributes(
+                                execution_id=handle.execution_id,
+                                actor_id=self._agent_name or "host",
+                                agent_name=agent,
+                                dispatch_mode="k3s",
+                                transport_kind="http",
+                                session_id=session_id,
+                                parent_session_id=session_id,
+                                child_session_id=handle.child_session_id,
+                                target_node=handle.target_node,
+                            ),
+                        )
                         self._record_remote_execution(execution_id=handle.execution_id, agent=agent, handle=handle)
 
                         outcome = _AttemptOutcome()
@@ -602,6 +619,9 @@ class TaskToolMixin:
                 agent_name=agent,
                 dispatch_mode="local",
                 transport_kind="local",
+                session_id=session_id,
+                parent_session_id=session_id,
+                child_session_id=child_session_id,
             ),
         )
         try:
@@ -619,6 +639,7 @@ class TaskToolMixin:
                         dispatch_mode="local",
                         child_session_id=child_session_id,
                         run=lambda _control_messages: child_runtime.query(combined_prompt),
+                        parent_session_id=session_id,
                     )
                 )
 

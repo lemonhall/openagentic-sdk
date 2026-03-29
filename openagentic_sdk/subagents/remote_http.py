@@ -20,6 +20,7 @@ from ..options import (
 )
 from ..remote_cluster_config import ResolvedRemoteProviderSpec, build_provider_from_spec
 from ..serialization import event_to_dict
+from ..server.session_transcript_view import build_session_transcript
 from ..sessions.store import FileSessionStore
 from .actor_lifecycle import ActorDownEvent, classify_remote_exception_down
 from .actor_protocol import ActorEnvelope
@@ -102,6 +103,9 @@ class HttpRemoteActorTransport:
                 agent_name=request.agent_name,
                 dispatch_mode=request.definition.executor.kind,
                 transport_kind="http",
+                session_id=request.parent_session_id,
+                parent_session_id=request.parent_session_id,
+                target_node=request.definition.executor.node_name,
             ),
         )
         payload = _request_to_dict(request)
@@ -124,6 +128,10 @@ class HttpRemoteActorTransport:
                     agent_name=request.agent_name,
                     dispatch_mode=request.definition.executor.kind,
                     transport_kind="http",
+                    session_id=request.parent_session_id,
+                    parent_session_id=request.parent_session_id,
+                    child_session_id=child_session_id,
+                    target_node=target_node,
                 ),
             )
             self._tracing.add_event(transport_span, "spawn", attributes={"oa.execution.id": execution_id})
@@ -357,6 +365,7 @@ class RemoteTaskHttpWorkerServer:
 
     def make_server(self) -> ThreadingHTTPServer:
         worker = InProcessRemoteTaskWorker(base_options=self._base_options, session_store=self._session_store)
+        session_store = self._session_store
         repo_root = self._repo_root
         node_name = self._node_name
         health_status = {"deployment_mode": "smoke", **dict(self._health_status)}
@@ -484,6 +493,25 @@ class RemoteTaskHttpWorkerServer:
                             **health_status,
                         },
                     )
+                    return
+                if parsed.path.startswith("/oa/transcript/session/"):
+                    session_id = parsed.path.removeprefix("/oa/transcript/session/")
+                    try:
+                        payload = build_session_transcript(
+                            store=session_store,
+                            session_id=session_id,
+                            source="worker",
+                        )
+                    except ValueError:
+                        _write_json(self, 400, {"error": "invalid_session_id"})
+                        return
+                    except FileNotFoundError:
+                        _write_json(self, 404, {"error": "transcript_not_found"})
+                        return
+                    except Exception as exc:  # noqa: BLE001
+                        _write_json(self, 500, {"error": "transcript_unavailable", "detail": str(exc)})
+                        return
+                    _write_json(self, 200, payload)
                     return
                 if parsed.path != "/stream":
                     _write_json(self, 404, {"error": "not_found"})

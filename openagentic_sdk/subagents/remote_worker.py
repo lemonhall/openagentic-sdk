@@ -107,6 +107,8 @@ class InProcessRemoteTaskWorker:
                     run=lambda _control_messages: child_runtime.query(combined_prompt),
                     trace_context=request.trace_context,
                     trace_links=(request.trace_context,) if request.trace_context else (),
+                    parent_session_id=request.parent_session_id,
+                    target_node=request.definition.executor.node_name,
                 )
             )
             actor_state["transport"] = transport

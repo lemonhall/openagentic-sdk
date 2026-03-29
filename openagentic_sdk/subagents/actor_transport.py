@@ -31,6 +31,8 @@ class ActorSpawnSpec:
     control_mailbox: str = "control"
     trace_context: Mapping[str, str] | None = None
     trace_links: Sequence[Mapping[str, str]] = ()
+    parent_session_id: str | None = None
+    target_node: str | None = None
 
 
 class ActorTransport(Protocol):

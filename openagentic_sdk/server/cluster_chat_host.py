@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from ..options import OpenAgenticOptions
 from ..permissions.gate import PermissionGate
@@ -27,6 +29,7 @@ from ..subagents.git_sync import CommittedGitSynchronizer, GitSyncResult
 from ..subagents.remote_http import HttpRemoteTaskDispatcher
 from ..subagents.session_meta import build_authoritative_session_metadata, try_resolve_git_revision
 from ..tools.defaults import default_tool_registry
+from .session_transcript_view import build_session_transcript
 
 
 def _parse_request_target(path: str) -> list[str]:
@@ -241,6 +244,66 @@ class ClusterChatHostServer:
                     _write_json(self, 200, {"session_id": session_id, "entries": entries})
                     return
 
+                if len(parts) == 4 and parts[:3] == ["oa", "transcript", "session"]:
+                    session_id = parts[3]
+                    try:
+                        payload = build_session_transcript(
+                            store=store,
+                            session_id=session_id,
+                            source="host",
+                            default_agent_name="host",
+                        )
+                    except ValueError:
+                        _write_json(self, 400, {"error": "invalid_session_id"})
+                        return
+                    except FileNotFoundError:
+                        _write_json(self, 404, {"error": "transcript_not_found"})
+                        return
+                    except Exception as exc:  # noqa: BLE001
+                        _write_json(self, 500, {"error": "transcript_unavailable", "detail": str(exc)})
+                        return
+                    _write_json(self, 200, payload)
+                    return
+
+                if len(parts) == 5 and parts[:3] == ["oa", "transcript", "child"]:
+                    target_node = parts[3]
+                    session_id = parts[4]
+                    dispatcher = options.remote_task_dispatcher
+                    node_base_url = getattr(dispatcher, "node_base_url", None)
+                    if not callable(node_base_url):
+                        _write_json(self, 503, {"error": "transcript_proxy_unavailable"})
+                        return
+                    base_url = node_base_url(target_node)
+                    if not isinstance(base_url, str) or not base_url:
+                        _write_json(self, 404, {"error": "target_node_not_found", "target_node": target_node})
+                        return
+                    worker_url = f"{base_url.rstrip('/')}/oa/transcript/session/{session_id}"
+                    req = urllib_request.Request(worker_url, method="GET")
+                    try:
+                        with urllib_request.urlopen(req, timeout=10.0) as resp:  # noqa: S310
+                            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+                            _write_json(self, int(resp.status), payload)
+                            return
+                    except urllib_error.HTTPError as exc:
+                        body = exc.read().decode("utf-8", errors="replace")
+                        try:
+                            payload = json.loads(body)
+                        except json.JSONDecodeError:
+                            payload = {"error": "transcript_proxy_failed", "detail": body}
+                        _write_json(self, int(exc.code), payload)
+                        return
+                    except urllib_error.URLError as exc:
+                        _write_json(
+                            self,
+                            502,
+                            {
+                                "error": "transcript_proxy_failed",
+                                "target_node": target_node,
+                                "detail": str(exc.reason),
+                            },
+                        )
+                        return
+
                 _write_json(self, 404, {"error": "not_found"})
 
             def do_POST(self):  # noqa: N802
@@ -306,9 +369,10 @@ class ClusterChatHostServer:
 
 class StaticNodeHttpRemoteTaskDispatcher:
     def __init__(self, *, node_urls: Mapping[str, str], timeout_s: float = 60.0) -> None:
+        self._node_urls = {node_name: base_url.rstrip("/") for node_name, base_url in node_urls.items()}
         self._dispatchers = {
             node_name: HttpRemoteTaskDispatcher(base_url=base_url, timeout_s=timeout_s)
-            for node_name, base_url in node_urls.items()
+            for node_name, base_url in self._node_urls.items()
         }
 
     def bind_actor_tracing(self, tracing: ActorTracing) -> None:
@@ -316,6 +380,9 @@ class StaticNodeHttpRemoteTaskDispatcher:
             bind_actor_tracing = getattr(dispatcher, "bind_actor_tracing", None)
             if callable(bind_actor_tracing):
                 bind_actor_tracing(tracing)
+
+    def node_base_url(self, node_name: str) -> str | None:
+        return self._node_urls.get(node_name)
 
     async def dispatch(self, request):
         node_name = request.definition.executor.node_name or ""

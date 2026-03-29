@@ -98,7 +98,13 @@ class TestActorTracing(unittest.IsolatedAsyncioTestCase):
                 for event in events
                 if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
             )
+            host_session_id = next(
+                getattr(event, "session_id", "")
+                for event in events
+                if getattr(event, "type", None) == "system.init"
+            )
             execution_id = task_result.output["execution_id"]
+            child_session_id = task_result.output["child_session_id"]
             spans = exporter.get_finished_spans()
 
             host_span = _find_span(spans, name="oa.task.execution", execution_id=execution_id)
@@ -107,11 +113,16 @@ class TestActorTracing(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(host_span.attributes["oa.execution.id"], execution_id)
             self.assertEqual(host_span.attributes["oa.agent.name"], "worker")
             self.assertEqual(host_span.attributes["oa.dispatch.mode"], "local")
+            self.assertEqual(host_span.attributes["oa.session_id"], host_session_id)
+            self.assertEqual(host_span.attributes["oa.child_session_id"], child_session_id)
 
             self.assertEqual(actor_span.attributes["oa.execution.id"], execution_id)
             self.assertEqual(actor_span.attributes["oa.agent.name"], "worker")
             self.assertEqual(actor_span.attributes["oa.dispatch.mode"], "local")
             self.assertEqual(actor_span.attributes["oa.transport.kind"], "local")
+            self.assertEqual(actor_span.attributes["oa.session_id"], child_session_id)
+            self.assertEqual(actor_span.attributes["oa.parent_session_id"], host_session_id)
+            self.assertEqual(actor_span.attributes["oa.child_session_id"], child_session_id)
 
             host_event_names = [event.name for event in host_span.events]
             self.assertIn("spawn", host_event_names)
@@ -258,6 +269,9 @@ class TestActorTracing(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(transport_span.attributes["oa.agent.name"], "worker_remote")
             self.assertEqual(transport_span.attributes["oa.dispatch.mode"], "k3s")
             self.assertEqual(transport_span.attributes["oa.transport.kind"], "http")
+            self.assertEqual(transport_span.attributes["oa.parent_session_id"], "p" * 32)
+            self.assertEqual(transport_span.attributes["oa.child_session_id"], "child-http-1")
+            self.assertEqual(transport_span.attributes["oa.target_node"], "node-http")
 
             event_names = [event.name for event in transport_span.events]
             self.assertIn("spawn", event_names)
@@ -340,6 +354,10 @@ class TestActorTracing(unittest.IsolatedAsyncioTestCase):
                 transport_kind="local",
             )
             host_context = host_span.get_span_context()
+            self.assertEqual(actor_span.attributes["oa.session_id"], handle.child_session_id)
+            self.assertEqual(actor_span.attributes["oa.parent_session_id"], "p" * 32)
+            self.assertEqual(actor_span.attributes["oa.child_session_id"], handle.child_session_id)
+            self.assertEqual(actor_span.attributes["oa.target_node"], "node-remote")
             self.assertTrue(actor_span.links, "remote worker child span should expose at least one trace link")
             linked_contexts = {(link.context.trace_id, link.context.span_id) for link in actor_span.links}
             self.assertIn((host_context.trace_id, host_context.span_id), linked_contexts)

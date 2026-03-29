@@ -195,6 +195,10 @@ def actor_execution_attributes(
     agent_name: str | None,
     dispatch_mode: str | None,
     transport_kind: str | None,
+    session_id: str | None = None,
+    parent_session_id: str | None = None,
+    child_session_id: str | None = None,
+    target_node: str | None = None,
 ) -> dict[str, Any]:
     return {
         "oa.execution.id": execution_id,
@@ -202,6 +206,10 @@ def actor_execution_attributes(
         "oa.agent.name": agent_name,
         "oa.dispatch.mode": dispatch_mode,
         "oa.transport.kind": transport_kind,
+        "oa.session_id": session_id,
+        "oa.parent_session_id": parent_session_id,
+        "oa.child_session_id": child_session_id,
+        "oa.target_node": target_node,
     }
 
 
@@ -222,7 +230,8 @@ def down_trace_attributes(down: Any) -> dict[str, Any]:
         "oa.reason.kind": getattr(down, "reason_kind", None),
         "oa.reason.detail": getattr(down, "reason_detail", None),
         "oa.dispatch.mode": getattr(down, "dispatch_mode", None),
-        "oa.target.node": getattr(down, "target_node", None),
+        "oa.child_session_id": getattr(down, "child_session_id", None),
+        "oa.target_node": getattr(down, "target_node", None),
     }
 
 

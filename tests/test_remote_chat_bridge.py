@@ -15,7 +15,7 @@ from unittest import mock
 
 from openagentic_cli.repl import run_chat
 from openagentic_cli.style import StyleConfig
-from openagentic_sdk.events import AssistantMessage, Result
+from openagentic_sdk.events import AssistantMessage, Result, SystemInit, UserMessage
 from openagentic_sdk.options import (
     AgentDefinition,
     AgentExecutorDefinition,
@@ -105,6 +105,45 @@ class _RecordingRemoteDispatcher:
             target_node=request.definition.executor.node_name or "",
             git_revision=request.git_revision,
             worker_execution_id="exec-123",
+            events=_events(),
+        )
+
+
+class _InitEmittingRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+        self.child_session_id = "c" * 32
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+
+        async def _events():
+            yield SystemInit(
+                session_id=self.child_session_id,
+                cwd=request.cwd,
+                sdk_version="test-sdk",
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+                enabled_tools=["Read"],
+                enabled_providers=["bridge-child"],
+            )
+            yield AssistantMessage(
+                text="remote child says hi",
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+            yield Result(
+                final_text="remote child done",
+                session_id=self.child_session_id,
+                agent_name=request.agent_name,
+                parent_tool_use_id=request.parent_tool_use_id,
+            )
+
+        return request.make_handle(
+            child_session_id=self.child_session_id,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id="exec-child-init",
             events=_events(),
         )
 
@@ -767,6 +806,80 @@ class TestRemoteChatBridge(unittest.IsolatedAsyncioTestCase):
             finally:
                 httpd.shutdown()
                 httpd.server_close()
+
+    async def test_run_chat_keeps_host_resume_when_child_system_init_flows_back(self) -> None:
+        from openagentic_sdk.server.cluster_chat_host import ClusterChatHostServer
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = _InitEmittingRemoteDispatcher()
+            host_options = OpenAgenticOptions(
+                provider=_BridgeProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                project_dir=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    )
+                },
+            )
+            httpd = ClusterChatHostServer(base_options=host_options, session_store=store).make_server()
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client_options = OpenAgenticOptions(
+                    provider=_BridgeOnlyProvider(),
+                    model="bridge",
+                    cwd=str(root),
+                    project_dir=str(root),
+                    permission_gate=PermissionGate(permission_mode="bypass"),
+                    remote_chat_base_url=f"http://127.0.0.1:{httpd.server_address[1]}",
+                    remote_chat_timeout_s=1.0,
+                )
+                stdin = StringIO("delegate now\n这有100字？\n/exit\n")
+                stdout = StringIO()
+                rc = await run_chat(
+                    client_options,
+                    color_config=StyleConfig(color="never"),
+                    debug=False,
+                    stdin=stdin,
+                    stdout=stdout,
+                )
+                rendered = stdout.getvalue()
+                self.assertEqual(rc, 0)
+                self.assertIn("host delegated", rendered)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5.0)
+
+            sessions_root = store.root_dir / "sessions"
+            session_dirs = sorted(path.name for path in sessions_root.iterdir() if path.is_dir())
+            self.assertEqual(len(session_dirs), 1, "child system.init must not create a second host-side resume session")
+            self.assertNotIn(dispatcher.child_session_id, session_dirs)
+
+            host_session_id = session_dirs[0]
+            host_user_messages = [
+                event.text
+                for event in store.read_events(host_session_id)
+                if isinstance(event, UserMessage)
+            ]
+            self.assertEqual(host_user_messages, ["delegate now", "这有100字？"])
 
     async def test_cluster_chat_client_fails_fast_when_host_is_unreachable(self) -> None:
         from openagentic_sdk.server.cluster_chat_client import ClusterChatClient

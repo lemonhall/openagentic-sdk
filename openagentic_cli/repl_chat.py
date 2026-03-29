@@ -15,6 +15,7 @@ from openagentic_sdk.options import OpenAgenticOptions
 from openagentic_sdk.paths import default_session_root
 from openagentic_sdk.runtime import AgentRuntime
 from openagentic_sdk.server.cluster_chat_client import ClusterChatClient, ClusterChatRuntime
+from openagentic_sdk.session_tracking import capture_root_session_id
 from openagentic_sdk.sessions.store import FileSessionStore
 from openagentic_sdk.skills.index import index_skills
 
@@ -542,10 +543,7 @@ async def run_chat_impl(
                             prompt_task = asyncio.create_task(session.prompt_async(**_ptk_prompt_kwargs()))
 
                         async for ev in runtime.query(prompt_text):
-                            if getattr(ev, "type", None) == "system.init":
-                                sid = getattr(ev, "session_id", None)
-                                if isinstance(sid, str) and sid:
-                                    session_id = sid
+                            session_id = capture_root_session_id(session_id or "", ev) or None
                             renderer.on_event(ev)
                             if prompt_task is not None and prompt_task.done():
                                 exc = None
@@ -799,10 +797,7 @@ async def run_chat_impl(
                 run_opts = replace(opts, resume=session_id, abort_event=abort_event)
                 runtime = _make_runtime(run_opts)
                 async for ev in runtime.query(prompt_text):
-                    if getattr(ev, "type", None) == "system.init":
-                        sid = getattr(ev, "session_id", None)
-                        if isinstance(sid, str) and sid:
-                            session_id = sid
+                    session_id = capture_root_session_id(session_id or "", ev) or None
                     renderer.on_event(ev)
                     if os.name == "nt" and _windows_ctrl_c_consume():
                         abort_event.set()

@@ -142,6 +142,41 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(task_result.output["child_stop_reason"], "no_output")
             self.assertEqual(getattr(events[-1], "final_text", None), "parent saw task failure")
 
+    async def test_run_returns_parent_session_id_instead_of_child_session_id(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            store = FileSessionStore(root_dir=root)
+
+            options = OpenAgenticOptions(
+                provider=TaskProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={
+                    "worker": AgentDefinition(
+                        description="child",
+                        prompt="CHILD_DEF: do the work",
+                        tools=(),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            result = await openagentic_sdk.run(prompt="PARENT: delegate", options=options)
+            self.assertTrue(result.session_id)
+            self.assertEqual(result.session_id, result.events[0].session_id)
+
+            task_result = next(
+                event
+                for event in result.events
+                if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+            )
+            self.assertNotEqual(result.session_id, task_result.output["child_session_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

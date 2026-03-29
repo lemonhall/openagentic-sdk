@@ -96,7 +96,7 @@ class ManagedK3dChatPortForward:
             assert proc is not None
             if proc.poll() is not None:
                 output = proc.stdout.read() if proc.stdout is not None else ""
-                raise RuntimeError(f"k3d port-forward exited early: {output.strip() or 'no output'}")
+                raise RuntimeError(_format_port_forward_start_error(target=self._target, output=output))
             try:
                 self._health = self._health_probe(self.base_url)
                 return self._health
@@ -143,3 +143,24 @@ def _pick_free_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _format_port_forward_start_error(*, target: K3dChatTarget, output: str) -> str:
+    text = str(output or "").strip()
+    if f'namespaces "{target.namespace}" not found' in text:
+        if target.mode == "real":
+            return (
+                f"k3d real cluster is not deployed yet (namespace '{target.namespace}' not found).\n"
+                "Deploy it from WSL2 first:\n"
+                "  cd /mnt/e/development/openagentic-sdk\n"
+                "  PYTHONPATH=/mnt/e/development/openagentic-sdk python scripts/apply_v56_real_cluster.py "
+                "--remote-config openagentic.remote.json --env-file .openagentic.remote.env "
+                "--output-dir .openagentic-rendered --apply"
+            )
+        return (
+            f"k3d smoke cluster is not ready yet (namespace '{target.namespace}' not found).\n"
+            "Bring it up from WSL2 first:\n"
+            '  cd /mnt/e/development/openagentic-sdk\n'
+            '  python -m unittest discover -s e2e_k3d_tests -p "e2e_remote_chat_basic.py" -v'
+        )
+    return f"k3d port-forward exited early: {text or 'no output'}"

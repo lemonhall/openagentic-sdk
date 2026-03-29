@@ -47,6 +47,26 @@ class TestCliK3dMain(unittest.TestCase):
         self.assertEqual(captured["remote_chat_base_url"], "http://127.0.0.1:28776")
         resolve_target.assert_called_once_with(mode="real")
 
+    def test_k3d_real_missing_namespace_error_is_human_readable(self) -> None:
+        from openagentic_cli.k3d_chat import K3dChatTarget, _format_port_forward_start_error
+
+        text = _format_port_forward_start_error(
+            target=K3dChatTarget(
+                mode="real",
+                namespace="openagentic-v56-real",
+                service="oa-cluster-chat-host",
+                local_port=18776,
+                remote_port=8766,
+                wsl_user="lemonhall",
+            ),
+            output='Error from server (NotFound): namespaces "openagentic-v56-real" not found',
+        )
+
+        self.assertIn("k3d real cluster is not deployed yet", text)
+        self.assertIn("openagentic-v56-real", text)
+        self.assertIn("scripts/apply_v56_real_cluster.py", text)
+        self.assertIn(".openagentic.remote.env", text)
+
 
 if __name__ == "__main__":
     unittest.main()

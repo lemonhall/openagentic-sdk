@@ -143,33 +143,38 @@
 - “拉外网镜像”不再是每次 bring-up 的默认动作
 - 真正需要访问外网的，只剩“本机 Docker 第一次根本没有这个镜像”
 - 如果第一次 pull 失败，报错会明确提示：应让 WSL Docker daemon 通过 `http://192.168.50.149:7897` 访问外网
-### 2.5 real cluster 改成本地 wheelhouse 启动
+### 2.5 real cluster 改成预烘焙 runtime image 启动
 
-`scripts/apply_v56_real_cluster.py` 现在会先把运行时依赖下载到 authoritative mirror：
+从 v61 开始，`real-model host/worker` 不再依赖 authoritative mirror 里的 wheelhouse。
 
-- 路径：`<authoritative-mirror>/.openagentic-wheelhouse`
+新的语义是：
 
-当前预下载内容：
+- host / worker 共用同一个镜像：`openagentic/python-runtime:v61`
+- 运行时依赖在镜像构建期预装：
+  - `protobuf<6`
+  - `opentelemetry-api<2`
+  - `opentelemetry-sdk<2`
+  - `opentelemetry-exporter-otlp-proto-http<2`
+- real manifests 只负责：
+  - 设置环境变量
+  - `exec python -u -m ...`
 
-- `protobuf<6`
-- `opentelemetry-api<2`
-- `opentelemetry-sdk<2`
-- `opentelemetry-exporter-otlp-proto-http<2`
+手工构建命令（在 WSL2 的仓库根目录执行）：
 
-real manifests 改成：
-
-- 启动时只执行本地安装
-- 不再启动时访问公网
-
-也就是：
-
-```text
-python -m pip install --no-index --find-links /workspace/repo/.openagentic-wheelhouse ...
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && docker build -f deploy/k8s/v61/openagentic-python-runtime.Dockerfile -t openagentic/python-runtime:v61 ."'
 ```
+
+`scripts/apply_v56_real_cluster.py --apply` 现在会在 `kubectl apply` 前：
+
+- 检查本地是否已有 `openagentic/python-runtime:v61`
+- 若存在，则把它导入 k3d 三个节点
+- 若不存在，则快速失败，并直接打印上面的 build 命令
 
 效果：
 
-- relay 掉了也不会再因为 `pip install` 失败而把整个 real namespace 打进 `CrashLoopBackOff`。
+- real pod 启动期不再执行 `pip install`
+- relay 掉了也不会再因为启动期依赖安装失败而把整个 real namespace 打进 `CrashLoopBackOff`
 
 ### 2.6 代理只给 Web 工具，不再全局污染 provider
 
@@ -200,6 +205,37 @@ python -m pip install --no-index --find-links /workspace/repo/.openagentic-wheel
 - `WebSearch/WebFetch` 仍然可以单独走代理；
 - relay 掉了以后，模型聊天/写作不会再被代理链路拖死。
 
+### 2.7 `oa chat --k3d-real` 的 rollout 等待改成短轮询 + 总窗口
+
+v61 现场又暴露出另一条冷启动脆弱链路：
+
+- `wsl --shutdown` 之后，`k3d cluster start v56-openagentic` 虽然会返回成功；
+- 但 `k3d-v56-openagentic-server-0` 与 kube-apiserver 仍可能在 2 到 4 分钟内反复经历：
+  - `SERVERS 0/1`
+  - `Error from server (ServiceUnavailable): apiserver not ready`
+  - `kubectl rollout status ...` 单次等待 120 秒后直接超时
+
+所以 `openagentic_cli/k3d_chat.py` 现在又补了一层恢复语义：
+
+- 仍然保持用户入口不变：
+  - `oa chat --k3d-real`
+- 但内部的 rollout 等待从“一次性 `kubectl rollout status --timeout=120s`”改成了：
+  - 每次最多等 `15s`
+  - 遇到这些情况视为暂态，继续轮询：
+    - `apiserver not ready`
+    - `ServiceUnavailable`
+    - `timed out waiting for the condition`
+    - `context deadline exceeded`
+    - `client timeout exceeded while awaiting headers`
+    - `subprocess.TimeoutExpired`
+  - 总恢复窗口放宽到 `240s`
+
+这条改动的意义是：
+
+- 热启动时不会因为一次长阻塞把 CLI 挂住；
+- 冷启动时又能跨过 k3d/kube 控制面那段最容易抖动的时间窗；
+- 失败时也不再是“120 秒到了就直接 traceback”，而是先把 cluster 醒稳再继续。
+
 ## 3. 当前验证结论
 
 这次回归已经验证了下面几件事：
@@ -211,6 +247,11 @@ python -m pip install --no-index --find-links /workspace/repo/.openagentic-wheel
    - `oa chat --k3d-real` 仍能正常直接聊天
    - writer remote subagent 仍能正常执行
 4. 当 k3d cluster config 发生漂移时，harness 不再错误复用旧 cluster
+5. 在 `2026-03-30` 的真实冷启动回归里：
+   - 执行 `wsl --shutdown`
+   - 再通过 `ManagedK3dChatPortForward` 走同一条 `oa chat --k3d-real` 恢复链
+   - 从冷启动开始到 real host `/health` 恢复，实测约 `279s`
+   - 随后真实 writer 派发与 `http://127.0.0.1:16686/api/services` 均恢复正常
 
 换句话说：
 

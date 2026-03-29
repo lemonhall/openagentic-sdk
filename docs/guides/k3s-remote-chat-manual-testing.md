@@ -136,7 +136,11 @@ curl.exe http://127.0.0.1:18776/health
 - k3d 预热镜像现在也会落到 `~/.cache/openagentic-k3d/images/`；tar 已命中且节点里已有镜像时，不会重复 `docker image save` / `ctr import`；
 - 真正需要外网的，只剩“本机 Docker 第一次没有该镜像”；如果发生这一步，需确保 WSL Docker daemon 能通过 `http://192.168.50.149:7897` 访问外网；
 - `oa chat --k3d-real` 在 WSL2 重启后，如果发现 k3d API 还没恢复，会自动尝试 `k3d cluster start v56-openagentic`；
-- real host / worker 启动时不再依赖公网 `pip install`，而是从 authoritative mirror 里的 `.openagentic-wheelhouse` 本地安装运行时依赖；
+- `oa chat --k3d-real` 在 WSL2 冷启动后的第一次恢复里，当前实测可能需要接近 `5` 分钟；
+  - 这段等待现在主要来自 k3d/kube 控制面恢复；
+  - 不再是容器内 `pip install`；
+  - CLI 内部会用 `15s` 一次的 rollout 轮询持续等到总窗口 `240s`，这时不要急着手工重建 cluster；
+- real host / worker 启动时不再依赖启动期 `pip install`，而是共用预烘焙镜像 `openagentic/python-runtime:v61`；
 - `.openagentic.remote.env` 里的代理配置现在只会被映射成 `OPENAGENTIC_WEB_*`，仅供 `WebSearch/WebFetch` 使用，不再全局污染 provider 请求。
 
 ## 2. 需要哪些文件
@@ -268,7 +272,19 @@ NO_PROXY=127.0.0.1,localhost,.svc,.cluster.local
 wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_chat_basic.py\" -v"'
 ```
 
-### Step 4. 渲染并 apply real-model manifests
+### Step 4. 在 WSL2 内构建 real runtime image
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && docker build -f deploy/k8s/v61/openagentic-python-runtime.Dockerfile -t openagentic/python-runtime:v61 ."'
+```
+
+说明：
+
+- 这是 `real-model host/worker` 共用的运行时镜像；
+- 只需在镜像不存在或 Docker image id 变化后重新构建；
+- 如果你直接跑下一步 `--apply` 而本地没有这张镜像，脚本会快速失败，并把这条命令原样提示出来。
+
+### Step 5. 渲染并 apply real-model manifests
 
 ```powershell
 wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && PYTHONPATH=/mnt/e/development/openagentic-sdk python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.json --env-file .openagentic.remote.env --output-dir .openagentic-rendered --apply"'
@@ -282,9 +298,11 @@ wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sd
 - 渲染：
   - `.openagentic-rendered/v56-workers-real.yaml`
   - `.openagentic-rendered/chat-host-real.yaml`
+- 检查本地 `openagentic/python-runtime:v61`
+- 导入 k3d 三个节点
 - 再 `kubectl apply` 到 `openagentic-v56-real` namespace
 
-### Step 5. 等待 real-model pods ready
+### Step 6. 等待 real-model pods ready
 
 ```powershell
 wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s"'
@@ -292,7 +310,13 @@ wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real roll
 wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s"'
 ```
 
-### Step 6. 看 real-model namespace 里的 pod 状态
+说明：
+
+- 手工看 rollout 时，你仍然可以用 `180s` 这组命令；
+- 但 `oa chat --k3d-real` 自己内部已经不是“一把等满 120 秒”；
+- 如果刚经历 `wsl --shutdown`，请优先让 CLI 自己恢复，不要在前 2 到 4 分钟里立刻误判成 cluster 已坏。
+
+### Step 7. 看 real-model namespace 里的 pod 状态
 
 ```powershell
 wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real get pods -o wide"'
@@ -306,7 +330,7 @@ wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real get 
 
 而且都应该是 `Running`
 
-### Step 7. 检查 `/health`
+### Step 8. 检查 `/health`
 
 先给 host 做端口转发：
 
@@ -551,6 +575,12 @@ git status --short
 
 ```powershell
 wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && PYTHONPATH=/mnt/e/development/openagentic-sdk python scripts/apply_v56_real_cluster.py --remote-config openagentic.remote.json --env-file .openagentic.remote.env --output-dir .openagentic-rendered --apply"'
+```
+
+如果这里直接报本地 runtime image 缺失，不要怀疑 cluster；先执行：
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && docker build -f deploy/k8s/v61/openagentic-python-runtime.Dockerfile -t openagentic/python-runtime:v61 ."'
 ```
 
 ### 9.6 还不对，再刷新基础 k3d 环境

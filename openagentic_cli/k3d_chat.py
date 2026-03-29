@@ -15,6 +15,8 @@ _DEFAULT_REMOTE_PORT = 8766
 _DEFAULT_READY_TIMEOUT_S = 30.0
 _DEFAULT_CLUSTER_NAME = "v56-openagentic"
 _MAX_HEALTH_FAILURES_BEFORE_RECOVERY = 4
+_DEFAULT_ROLLOUT_RETRY_WINDOW_S = 240.0
+_DEFAULT_ROLLOUT_CHECK_TIMEOUT_S = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,14 +191,30 @@ class ManagedK3dChatPortForward:
         raise RuntimeError(f"failed to auto-start k3d cluster: {text or 'no output'}")
 
     def _wait_for_chat_host_rollout(self) -> None:
-        result = self._run_command(
-            build_rollout_status_command(self._target, timeout_s=max(self._ready_timeout_s, 120.0)),
-            timeout_s=max(self._ready_timeout_s, 120.0),
-        )
-        if result.returncode == 0:
-            return
-        text = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
-        raise RuntimeError(f"failed to wait for chat host rollout: {text or 'no output'}")
+        overall_timeout_s = max(self._ready_timeout_s, _DEFAULT_ROLLOUT_RETRY_WINDOW_S)
+        deadline = time.time() + overall_timeout_s
+        last_text = ""
+        while time.time() < deadline:
+            remaining_s = max(1.0, deadline - time.time())
+            attempt_timeout_s = min(_DEFAULT_ROLLOUT_CHECK_TIMEOUT_S, remaining_s)
+            try:
+                result = self._run_command(
+                    build_rollout_status_command(self._target, timeout_s=attempt_timeout_s),
+                    timeout_s=attempt_timeout_s + 5.0,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_text = f"rollout status timed out after {int(exc.timeout)}s"
+                self._sleep(1.0)
+                continue
+            if result.returncode == 0:
+                return
+            text = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
+            last_text = text or "no output"
+            if _looks_like_transient_rollout_unavailable(last_text):
+                self._sleep(1.0)
+                continue
+            raise RuntimeError(f"failed to wait for chat host rollout: {last_text}")
+        raise RuntimeError(f"failed to wait for chat host rollout: {last_text or 'timed out waiting for rollout'}")
 
     @staticmethod
     def _close_dead_process(proc: subprocess.Popen[str]) -> None:
@@ -260,3 +278,15 @@ def _looks_like_port_forward_target_unavailable(output: str) -> bool:
         and "connect: connection refused" in text
         and ("lost connection to pod" in text or "connection refused" in text)
     )
+
+
+def _looks_like_transient_rollout_unavailable(output: str) -> bool:
+    text = str(output or "").lower()
+    patterns = (
+        "apiserver not ready",
+        "serviceunavailable",
+        "timed out waiting for the condition",
+        "context deadline exceeded",
+        "client.timeout exceeded while awaiting headers",
+    )
+    return _looks_like_kube_api_unavailable(text) or any(pattern in text for pattern in patterns)

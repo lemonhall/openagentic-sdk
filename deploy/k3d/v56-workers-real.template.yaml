@@ -24,7 +24,7 @@ spec:
         kubernetes.io/hostname: k3d-v56-openagentic-agent-0
       containers:
         - name: worker
-          image: python:3.12-slim
+          image: openagentic/python-runtime:v61
           imagePullPolicy: IfNotPresent
           env:
             - name: PYTHONPATH
@@ -51,7 +51,6 @@ __OA_REMOTE_ENV_BLOCK__
             - -lc
             - >
               set -eu;
-              python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
               export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker,oa.namespace=openagentic-v56-real";
               exec python -u -m openagentic_sdk.subagents.remote_http_worker_server
               --host 0.0.0.0
@@ -113,7 +112,7 @@ spec:
         kubernetes.io/hostname: k3d-v56-openagentic-agent-1
       containers:
         - name: worker
-          image: python:3.12-slim
+          image: openagentic/python-runtime:v61
           imagePullPolicy: IfNotPresent
           env:
             - name: PYTHONPATH
@@ -140,7 +139,6 @@ __OA_REMOTE_ENV_BLOCK__
             - -lc
             - >
               set -eu;
-              python -m pip install -q --no-cache-dir --no-index --find-links /workspace/repo/.openagentic-wheelhouse "protobuf<6" "opentelemetry-api<2" "opentelemetry-sdk<2" "opentelemetry-exporter-otlp-proto-http<2";
               export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker,oa.namespace=openagentic-v56-real";
               exec python -u -m openagentic_sdk.subagents.remote_http_worker_server
               --host 0.0.0.0

@@ -100,17 +100,12 @@ class TestApplyV56RealCluster(unittest.TestCase):
             rendered_host,
         )
         self.assertIn(
-            'opentelemetry-exporter-otlp-proto-http<2',
+            'image: openagentic/python-runtime:v61',
             rendered_host,
         )
-        self.assertNotIn(
-            'name: HTTP_PROXY',
-            rendered_host,
-        )
-        self.assertIn(
-            '--no-index --find-links /workspace/repo/.openagentic-wheelhouse',
-            rendered_host,
-        )
+        self.assertNotIn('python -m pip install', rendered_host)
+        self.assertNotIn('.openagentic-wheelhouse', rendered_host)
+        self.assertNotIn('name: HTTP_PROXY', rendered_host)
         self.assertIn(
             'export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_HOST_NODE_NAME},oa.role=host,oa.namespace=openagentic-v56-real"',
             rendered_host,
@@ -119,43 +114,80 @@ class TestApplyV56RealCluster(unittest.TestCase):
             'value: "oa-remote-worker-real"',
             rendered_workers,
         )
+        self.assertIn(
+            'image: openagentic/python-runtime:v61',
+            rendered_workers,
+        )
         self.assertNotIn(
             'name: HTTP_PROXY',
             rendered_workers,
         )
-        self.assertIn(
-            '--no-index --find-links /workspace/repo/.openagentic-wheelhouse',
-            rendered_workers,
-        )
+        self.assertNotIn('python -m pip install', rendered_workers)
+        self.assertNotIn('.openagentic-wheelhouse', rendered_workers)
         self.assertIn(
             'export OTEL_RESOURCE_ATTRIBUTES="oa.node.name=${OA_REMOTE_NODE_NAME},oa.role=worker,oa.namespace=openagentic-v56-real"',
             rendered_workers,
         )
+        self.assertIn("Runtime image: openagentic/python-runtime:v61", proc.stdout)
 
-    def test_ensure_runtime_wheelhouse_downloads_requirements_into_authoritative_mirror(self) -> None:
+    def test_ensure_runtime_image_present_fails_with_explicit_build_command(self) -> None:
         module = _load_script_module()
-        with TemporaryDirectory() as td:
-            mirror_root = Path(td) / "mirror"
-            mirror_root.mkdir(parents=True, exist_ok=True)
-            calls: list[list[str]] = []
+        repo_root = Path(__file__).resolve().parents[1]
 
-            def fake_run(argv: list[str], check: bool, env: dict[str, str] | None = None, **kwargs):
-                _ = (check, env, kwargs)
-                calls.append(argv)
+        def fake_run(argv: list[str], check: bool, capture_output: bool = False, text: bool = False, env=None, **kwargs):
+            _ = (check, capture_output, text, env, kwargs)
+            if argv[:3] == ["docker", "image", "inspect"]:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="missing")
+            raise AssertionError(f"unexpected command: {argv}")
+
+        with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(RuntimeError) as ctx:
+                module._ensure_runtime_image_present(repo_root)
+
+        text = str(ctx.exception)
+        self.assertIn("openagentic/python-runtime:v61", text)
+        self.assertIn("docker build", text)
+        self.assertIn("deploy/k8s/v61/openagentic-python-runtime.Dockerfile", text)
+
+    def test_apply_path_preloads_runtime_image_before_kubectl_apply(self) -> None:
+        module = _load_script_module()
+        repo_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as td:
+            kubectl_calls: list[list[str]] = []
+
+            def fake_run(argv: list[str], check: bool, **kwargs):
+                _ = (check, kwargs)
+                kubectl_calls.append(argv)
                 return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-            with mock.patch.object(module, "_authoritative_repo_root", return_value=mirror_root), mock.patch.object(
+            with mock.patch.object(module, "_ensure_runtime_image_preloaded") as preload, mock.patch.object(
                 module.subprocess,
                 "run",
                 side_effect=fake_run,
             ):
-                wheelhouse = module._ensure_runtime_wheelhouse()
-            self.assertEqual(wheelhouse, mirror_root / ".openagentic-wheelhouse")
-            self.assertTrue((wheelhouse / ".requirements.txt").exists())
-            self.assertEqual(calls[0][0:4], [sys.executable, "-m", "pip", "download"])
-            self.assertIn(str(wheelhouse), calls[0])
-            self.assertIn("protobuf<6", calls[0])
-            self.assertIn("opentelemetry-exporter-otlp-proto-http<2", calls[0])
+                rc = module.main(
+                    [
+                        "--repo-root",
+                        str(repo_root),
+                        "--remote-config",
+                        "openagentic.remote.example.json",
+                        "--env-file",
+                        ".openagentic.remote.env.example",
+                        "--output-dir",
+                        td,
+                        "--apply",
+                    ]
+                )
+
+        self.assertEqual(rc, 0)
+        preload.assert_called_once_with(repo_root)
+        self.assertEqual(
+            kubectl_calls,
+            [
+                ["kubectl", "apply", "-f", str(Path(td) / "v56-workers-real.yaml")],
+                ["kubectl", "apply", "-f", str(Path(td) / "chat-host-real.yaml")],
+            ],
+        )
 
 
 if __name__ == "__main__":

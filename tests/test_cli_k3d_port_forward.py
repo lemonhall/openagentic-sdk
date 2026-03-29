@@ -263,6 +263,114 @@ class TestCliK3dPortForward(unittest.TestCase):
         self.assertIn("k3d cluster start v56-openagentic", run_calls[0][-1])
         self.assertIn("rollout status deployment/oa-cluster-chat-host", run_calls[1][-1])
 
+    def test_start_retries_rollout_wait_when_apiserver_is_temporarily_not_ready(self) -> None:
+        from openagentic_cli.k3d_chat import K3dChatTarget, ManagedK3dChatPortForward
+
+        procs = [_FakeProc(), _FakeProc()]
+        health_calls = {"count": 0}
+        run_responses = [
+            subprocess.CompletedProcess(["wsl"], 0, stdout="started\n", stderr=""),
+            subprocess.CompletedProcess(
+                ["wsl"],
+                1,
+                stdout="Error from server (ServiceUnavailable): apiserver not ready\n",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(["wsl"], 0, stdout="ready\n", stderr=""),
+        ]
+        run_calls: list[list[str]] = []
+
+        def fake_spawn(argv: list[str]) -> _FakeProc:
+            return procs.pop(0)
+
+        def fake_run(argv: list[str], *, timeout_s: float) -> subprocess.CompletedProcess[str]:
+            _ = timeout_s
+            run_calls.append(argv)
+            return run_responses.pop(0)
+
+        def fake_health_probe(base_url: str):
+            _ = base_url
+            health_calls["count"] += 1
+            if health_calls["count"] <= 4:
+                raise ConnectionError("health not ready")
+            return {"ok": True, "deployment_mode": "real-model"}
+
+        target = K3dChatTarget(
+            mode="real",
+            namespace="openagentic-v56-real",
+            service="oa-cluster-chat-host",
+            local_port=28776,
+            remote_port=8766,
+            wsl_user="lemonhall",
+        )
+        forward = ManagedK3dChatPortForward(
+            target=target,
+            spawn=fake_spawn,
+            health_probe=fake_health_probe,
+            sleep=lambda _: None,
+            ready_timeout_s=0.1,
+            run_command=fake_run,
+        )
+
+        payload = forward.start()
+
+        self.assertEqual(payload["deployment_mode"], "real-model")
+        self.assertEqual(len(run_calls), 3)
+        self.assertIn("k3d cluster start v56-openagentic", run_calls[0][-1])
+        self.assertIn("rollout status deployment/oa-cluster-chat-host", run_calls[1][-1])
+        self.assertIn("rollout status deployment/oa-cluster-chat-host", run_calls[2][-1])
+
+    def test_start_retries_rollout_wait_when_rollout_status_times_out_during_cold_boot(self) -> None:
+        from openagentic_cli.k3d_chat import K3dChatTarget, ManagedK3dChatPortForward
+
+        procs = [_FakeProc(), _FakeProc()]
+        health_calls = {"count": 0}
+        run_calls: list[list[str]] = []
+
+        def fake_spawn(argv: list[str]) -> _FakeProc:
+            return procs.pop(0)
+
+        def fake_run(argv: list[str], *, timeout_s: float) -> subprocess.CompletedProcess[str]:
+            _ = timeout_s
+            run_calls.append(argv)
+            if len(run_calls) == 1:
+                return subprocess.CompletedProcess(["wsl"], 0, stdout="started\n", stderr="")
+            if len(run_calls) == 2:
+                raise subprocess.TimeoutExpired(argv, 120)
+            return subprocess.CompletedProcess(["wsl"], 0, stdout="ready\n", stderr="")
+
+        def fake_health_probe(base_url: str):
+            _ = base_url
+            health_calls["count"] += 1
+            if health_calls["count"] <= 4:
+                raise ConnectionError("health not ready")
+            return {"ok": True, "deployment_mode": "real-model"}
+
+        target = K3dChatTarget(
+            mode="real",
+            namespace="openagentic-v56-real",
+            service="oa-cluster-chat-host",
+            local_port=28776,
+            remote_port=8766,
+            wsl_user="lemonhall",
+        )
+        forward = ManagedK3dChatPortForward(
+            target=target,
+            spawn=fake_spawn,
+            health_probe=fake_health_probe,
+            sleep=lambda _: None,
+            ready_timeout_s=0.1,
+            run_command=fake_run,
+        )
+
+        payload = forward.start()
+
+        self.assertEqual(payload["deployment_mode"], "real-model")
+        self.assertEqual(len(run_calls), 3)
+        self.assertIn("k3d cluster start v56-openagentic", run_calls[0][-1])
+        self.assertIn("rollout status deployment/oa-cluster-chat-host", run_calls[1][-1])
+        self.assertIn("rollout status deployment/oa-cluster-chat-host", run_calls[2][-1])
+
 
 if __name__ == "__main__":
     unittest.main()

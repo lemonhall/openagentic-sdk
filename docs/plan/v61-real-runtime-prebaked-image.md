@@ -28,6 +28,7 @@
 - 新增一个仅服务于 `real-model host/worker` 的 Python runtime image
 - 修改 real manifests，去掉启动时 `pip install`
 - 补充本地 build / preload / apply 链路
+- 补充 `openagentic_cli/k3d_chat.py` 的冷启动恢复轮询，让 `oa chat --k3d-real` 扛住 WSL2 恢复期的 kube 控制面抖动
 - 补充针对 real runtime image 的单元回归
 - 跑一次 `wsl --shutdown -> oa chat --k3d-real -> Jaeger` 冷启动回归
 
@@ -118,6 +119,7 @@ v61 只承诺移除“运行时依赖安装”这段慢点，不承诺所有冷�
 
 - 冷启动时 logs / commands 中不再出现 `pip install`
 - `oa chat --k3d-real` 能在 WSL2 重启后恢复
+- 冷启动等待允许来自 k3d/kube 控制面恢复；当前实现会用 `15s` 一次的 rollout 轮询持续等待到总窗口 `240s`
 - Jaeger 与 transcript 不回归
 - Jaeger Search 里是否出现 `oa-cluster-chat-host-real` / `oa-remote-worker-real`，必须建立在 real rollout healthy 且至少完成一轮真实对话之后；否则 `service(1)` 只能说明还没有有效 real trace
 
@@ -134,6 +136,7 @@ v61 只承诺移除“运行时依赖安装”这段慢点，不承诺所有冷�
    - `oa chat --k3d-real`
    - 发送 `你好啊`
    - 成功收到回复
+   - 允许首轮恢复明显偏慢；`2026-03-30` 现场实测从冷启动开始到 real host `/health` 恢复约 `279s`
 4. Jaeger：
    - 先确认：
      - `wsl -u root -e bash -lc 'su - lemonhall -c "kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-0 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-remote-worker-agent-1 --timeout=180s && kubectl -n openagentic-v56-real rollout status deployment/oa-cluster-chat-host --timeout=180s"'`
@@ -151,8 +154,10 @@ v61 只承诺移除“运行时依赖安装”这段慢点，不承诺所有冷�
 - Modify: `deploy/k8s/v56/chat-host-real.template.yaml`
 - Modify: `deploy/k3d/v56-workers-real.template.yaml`
 - Modify: `scripts/apply_v56_real_cluster.py`
+- Modify: `openagentic_cli/k3d_chat.py`
 - Modify: `e2e_k3d_tests/_harness.py`（如需复用 image preload 能力）
 - Create: `tests/test_k3d_real_runtime_image.py`
+- Modify: `tests/test_cli_k3d_port_forward.py`
 - Modify: `docs/guides/k3s-remote-chat-manual-testing.md`
 - Modify: `docs/guides/k3d-wsl2-restart-hardening.md`
 
@@ -188,6 +193,7 @@ DoD：
 - 验证真实对话、Jaeger UI、service 列表
   - 注意：如果 service 列表仍只剩 `jaeger-all-in-one`，先查 `openagentic-v56-real` 是否 CrashLoop，不先查 Jaeger 前端
 - 更新手工测试文档
+- 接受“冷启动恢复可能接近 5 分钟，但不再需要手工重建 cluster”
 
 DoD：
 
@@ -210,3 +216,6 @@ DoD：
 
 - 风险 5：把 Jaeger Search 页里“没有 host / worker”误判成 UI 渲染问题，导致排查方向跑偏。
   - 缓解：先查 `openagentic-v56-real` rollout 与 Pod 日志；只有 real host / worker healthy 且已产生真实对话后，Jaeger service 列表的判读才有意义。
+
+- 风险 6：仍然假设单次 `kubectl rollout status --timeout=120s` 足以覆盖 WSL2 冷启动，结果 `oa chat --k3d-real` 在控制面长抖动窗口里直接超时。
+  - 缓解：改成 `15s` 一次的短轮询 + `240s` 总恢复窗口，并把这条行为写进手工测试 guide。

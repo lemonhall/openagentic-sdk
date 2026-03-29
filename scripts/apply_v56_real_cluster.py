@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -14,13 +12,8 @@ from openagentic_sdk.remote_cluster_config import load_remote_cluster_bootstrap
 
 _K3D_PROXY_HOSTNAME = "host.k3d.internal"
 _DEFAULT_K3D_GATEWAY_CONTAINER = "k3d-v56-openagentic-server-0"
-_RUNTIME_WHEELHOUSE_DIR = ".openagentic-wheelhouse"
-_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
-    "protobuf<6",
-    "opentelemetry-api<2",
-    "opentelemetry-sdk<2",
-    "opentelemetry-exporter-otlp-proto-http<2",
-)
+_RUNTIME_IMAGE_REF = "openagentic/python-runtime:v61"
+_RUNTIME_DOCKERFILE_RELATIVE = Path("deploy") / "k8s" / "v61" / "openagentic-python-runtime.Dockerfile"
 _PROXY_SCOPE_MAP: tuple[tuple[tuple[str, ...], str], ...] = (
     (("HTTP_PROXY", "http_proxy"), "OPENAGENTIC_WEB_HTTP_PROXY"),
     (("HTTPS_PROXY", "https_proxy"), "OPENAGENTIC_WEB_HTTPS_PROXY"),
@@ -146,35 +139,47 @@ def _authoritative_repo_root() -> Path:
     return authoritative_repo_root()
 
 
-def _runtime_requirements_text() -> str:
-    return "".join(f"{item}\n" for item in _RUNTIME_REQUIREMENTS)
+def _runtime_dockerfile_path(repo_root: Path) -> Path:
+    return repo_root / _RUNTIME_DOCKERFILE_RELATIVE
 
 
-def _ensure_runtime_wheelhouse() -> Path:
-    mirror_root = _authoritative_repo_root()
-    wheelhouse = mirror_root / _RUNTIME_WHEELHOUSE_DIR
-    marker_path = wheelhouse / ".requirements.txt"
-    expected_marker = _runtime_requirements_text()
-    if marker_path.exists() and marker_path.read_text(encoding="utf-8") == expected_marker and any(wheelhouse.iterdir()):
-        return wheelhouse
-    if wheelhouse.exists():
-        shutil.rmtree(wheelhouse)
-    wheelhouse.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "download",
-            "--dest",
-            str(wheelhouse),
-            *_RUNTIME_REQUIREMENTS,
-        ],
-        check=True,
-        env=os.environ.copy(),
+def _runtime_image_build_command() -> str:
+    return f"docker build -f {_RUNTIME_DOCKERFILE_RELATIVE.as_posix()} -t {_RUNTIME_IMAGE_REF} ."
+
+
+def _ensure_runtime_image_present(repo_root: Path) -> None:
+    _ = repo_root
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", _RUNTIME_IMAGE_REF],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    marker_path.write_text(expected_marker, encoding="utf-8", newline="\n")
-    return wheelhouse
+    if inspect.returncode == 0:
+        return
+    details = (inspect.stderr or inspect.stdout or "").strip() or "no output"
+    raise RuntimeError(
+        f"Required local runtime image '{_RUNTIME_IMAGE_REF}' is missing. "
+        "Build it in WSL from repo root with: "
+        f"{_runtime_image_build_command()} "
+        f"docker inspect output: {details}"
+    )
+
+
+def _ensure_runtime_image_preloaded(repo_root: Path) -> Path:
+    _ensure_runtime_image_present(repo_root)
+    from e2e_k3d_tests import _harness
+
+    tar_path = _harness._ensure_image_archive(_RUNTIME_IMAGE_REF)
+    remote_tar_path = f"/tmp/{_harness._image_safe_name(_RUNTIME_IMAGE_REF)}-amd64.tar"
+    for node_name in (_harness.SERVER_NODE, _harness.AGENT_A_NODE, _harness.AGENT_B_NODE):
+        _harness._import_image(
+            node_name=node_name,
+            tar_path=tar_path,
+            remote_tar_path=remote_tar_path,
+            expected_ref=_RUNTIME_IMAGE_REF,
+        )
+    return tar_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,7 +205,6 @@ def main(argv: list[str] | None = None) -> int:
     if not bootstrap.self_check.provider_ready:
         raise SystemExit("Remote cluster config self-check failed:\n- " + "\n- ".join(bootstrap.self_check.errors))
 
-    wheelhouse = _ensure_runtime_wheelhouse()
     env_block = _render_env_block(env_map)
     worker_text = _render_template(
         template_path=repo_root / "deploy" / "k3d" / "v56-workers-real.template.yaml",
@@ -224,10 +228,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Rendered: {workers_out}")
     print(f"Rendered: {host_out}")
     print(f"Config: {remote_config}")
-    print(f"Wheelhouse: {wheelhouse}")
+    print(f"Runtime image: {_RUNTIME_IMAGE_REF}")
     print(f"Provider profiles: {', '.join(bootstrap.provider_profiles)}")
 
     if args.apply:
+        _ensure_runtime_image_preloaded(repo_root)
         subprocess.run([args.kubectl, "apply", "-f", str(workers_out)], check=True)
         subprocess.run([args.kubectl, "apply", "-f", str(host_out)], check=True)
         print("Applied manifests to cluster.")

@@ -9,13 +9,47 @@
   - 使用 `openagentic.remote.json + .openagentic.remote.env`
   - 目标是验证 host 和 remote subagent 都已经是“真 agent”，不再返回 smoke 固定文案
 
-## 0. 先看端口，不要连错
+## 0. 推荐入口
+
+日常使用只记两件事：
+
+- 聊天入口：
+
+```powershell
+oa chat --k3d-real
+```
+
+- Jaeger Web UI：
+
+```powershell
+http://127.0.0.1:16686
+```
+
+说明：
+
+- `oa chat --k3d-real` 会自己管理 chat host 的 `port-forward`
+- `Jaeger` 走固定地址 `http://127.0.0.1:16686`
+- `oa chat --remote-host ...` 只保留给 debug / 手工诊断，不作为默认入口
+
+如果 `http://127.0.0.1:16686` 打不开，先启动固定端口转发：
+
+```powershell
+wsl -u root -e bash -lc 'su - lemonhall -c "nohup kubectl -n openagentic-v56 port-forward service/jaeger-query 16686:16686 >/tmp/oa-jaeger-16686.log 2>&1 &"'
+```
+
+然后直接在浏览器打开：
+
+```powershell
+http://127.0.0.1:16686
+```
+
+## Debug 附录：手工端口诊断
 
 - `http://127.0.0.1:18766`
-  - 这是 `smoke cluster` 常用入口
+  - 这是 `smoke cluster` 常用手工入口
   - 预期会返回固定 smoke 文案，不是真实模型
 - `http://127.0.0.1:18776`
-  - 这是 `real-model cluster` 入口
+  - 这是 `real-model cluster` 手工入口
   - 预期会走真实 provider
 
 从当前版本开始，`oa chat --remote-host ...` 连接远程 host 时，会先读一次 `/health` 并打印一行模式提示：
@@ -38,21 +72,6 @@ curl.exe http://127.0.0.1:18776/health
 
 - `deployment_mode = "smoke"`
 - `deployment_mode = "real-model"`
-
-如果你只是想直接进入聊天，而不想手工开 `kubectl port-forward`，现在可以直接用正式命令：
-
-```powershell
-oa chat --k3d-smoke
-oa chat --k3d-real
-```
-
-这两个命令会自己：
-
-- 选择一个空闲本地端口
-- 启动对应 namespace 的 `port-forward`
-- 预检 `/health`
-- 进入 `oa chat`
-- 退出时自动清理 `port-forward`
 
 ## 1. 先认清当前 M4 的边界
 
@@ -273,7 +292,13 @@ curl.exe http://127.0.0.1:18765/health
 
 ## 5. 进入 real-model 交互测试
 
-另开一个 PowerShell：
+默认入口：
+
+```powershell
+oa chat --k3d-real
+```
+
+仅当你要直接 debug chat bridge 时，再使用：
 
 ```powershell
 oa chat --remote-host http://127.0.0.1:18776

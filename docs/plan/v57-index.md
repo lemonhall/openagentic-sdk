@@ -41,7 +41,7 @@ v57 的目标不是“把所有远程通信都重写成 actor 系统”，而是
   - DoD（命令证据）：
     - `python -m unittest -q tests.test_actor_tracing`
     - `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_actor_trace_*.py\" -v"'`
-  - Status: done（`tests.test_actor_tracing` 已通过；docker-backed k3d trace smoke 已于 2026-03-29 实跑通过，链路为 `port-forward -> cluster chat host -> remote subagent -> Jaeger`；Jaeger Web UI 首页可经 `kubectl port-forward` 打开）
+  - Status: done（`tests.test_actor_tracing` 已通过；docker-backed k3d trace smoke 已于 2026-03-29 实跑通过，链路为 `port-forward -> cluster chat host -> remote subagent -> Jaeger`；Jaeger Web UI 固定地址为 `http://127.0.0.1:16686`）
 
 ## Plan Index
 
@@ -60,7 +60,7 @@ v57 的目标不是“把所有远程通信都重写成 actor 系统”，而是
 - REQ-0057-006 → `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_remote_replay` + `e2e_k3d_tests/e2e_remote_actor_reconnect.py` → local replay unit executed 2026-03-29；当前实现是 `child_events` 单 mailbox + `mailbox/after_seq` replay + 显式 ACK；worker replay smoke authored，current shell skipped due missing docker
 - REQ-0057-007 → `docs/plan/v57-host-subagent-actor-protocol-foundation.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_subagent_task` + `tests.test_remote_task_dispatch` + `tests.test_remote_http_transport` + `e2e_k3d_tests.e2e_remote_actor_host_reconnect` → local Task compatibility + remote abort/child event flow + host `Task` 自动 reconnect local smoke executed 2026-03-29；k3d host reconnect e2e authored，current shell skipped due missing docker
 - REQ-0057-008 → `docs/plan/v57-host-subagent-supervision-and-recovery.md` + `docs/plan/v57-host-subagent-http-transport-adapter.md` → `tests.test_actor_supervision` + `tests.test_cli_trace_renderer` + `tests.test_actor_http_transport` + `tests.test_remote_task_dispatch` → M2 local supervision + CLI trace 已执行；M3 已补 send/down/abort 身份与显式 ACK，但 tracing 集成仍属于 M4
-- REQ-0057-011 → `docs/plan/v57-host-subagent-tracing-jaeger.md` → `tests.test_actor_tracing` + `e2e_k3d_tests/e2e_remote_actor_trace_*.py` → local tracing unit executed 2026-03-29；docker-backed k3d trace smoke executed 2026-03-29，真实链路为 `cluster chat host -> remote subagent`；Jaeger Web UI port-forward verified
+- REQ-0057-011 → `docs/plan/v57-host-subagent-tracing-jaeger.md` → `tests.test_actor_tracing` + `e2e_k3d_tests/e2e_remote_actor_trace_*.py` → local tracing unit executed 2026-03-29；docker-backed k3d trace smoke executed 2026-03-29，真实链路为 `cluster chat host -> remote subagent`；Jaeger Web UI 固定地址 `http://127.0.0.1:16686` 已验证
 - REQ-0057-009 → 全部 v57 计划 → `tests.test_actor_*` + `e2e_k3d_tests/e2e_remote_actor_*.py` → local actor/http unit+integration executed 2026-03-29；k3d actor basic/reconnect/host-reconnect authored，current shell skipped due missing docker
 - REQ-0057-010 → `docs/plan/v57-index.md` + 全部 v57 计划 → 文档边界审阅 + code review gate → M3 implementation仍限定于 host ↔ subagent；未把 cluster chat bridge 纳入 actor transport 改造
 

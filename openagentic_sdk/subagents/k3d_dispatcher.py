@@ -59,10 +59,26 @@ class K3dPortForwardRemoteTaskDispatcher:
             self._stop_port_forward(proc)
             raise
 
-        async def _events():
+        async def _envelopes():
             try:
+                if handle.envelopes is not None:
+                    async for envelope in handle.envelopes:
+                        yield envelope
+                    return
                 async for event in handle.events:
                     yield event
+            finally:
+                self._stop_port_forward(proc)
+
+        async def _abort() -> None:
+            await handle.abort()
+
+        async def _send(envelope) -> None:
+            await handle.send(envelope)
+
+        async def _close() -> None:
+            try:
+                await handle.close()
             finally:
                 self._stop_port_forward(proc)
 
@@ -71,7 +87,11 @@ class K3dPortForwardRemoteTaskDispatcher:
             target_node=handle.target_node,
             git_revision=handle.git_revision,
             worker_execution_id=handle.worker_execution_id,
-            events=_events(),
+            envelopes=_envelopes() if handle.envelopes is not None else None,
+            events=None if handle.envelopes is not None else _envelopes(),
+            sender=_send,
+            aborter=_abort,
+            closer=_close,
         )
 
     def _resolve_worker_pod_name(self, node_name: str) -> str:

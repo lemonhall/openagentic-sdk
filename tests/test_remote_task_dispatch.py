@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 import unittest
@@ -14,7 +15,10 @@ from openagentic_sdk.options import (
 )
 from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.providers.base import ModelOutput, ToolCall
+from openagentic_sdk.serialization import event_to_dict
 from openagentic_sdk.sessions.store import FileSessionStore
+from openagentic_sdk.subagents.actor_lifecycle import ActorDownEvent
+from openagentic_sdk.subagents.actor_protocol import ActorEnvelope
 from openagentic_sdk.tools.registry import ToolRegistry
 
 
@@ -156,6 +160,76 @@ class DispatchFailRemoteDispatcher:
         raise ConnectionResetError("socket reset during dispatch")
 
 
+class AbortableRemoteDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+        self.child_started = asyncio.Event()
+        self._abort_requested = asyncio.Event()
+        self.abort_calls = 0
+
+    async def dispatch(self, request):
+        self.requests.append(request)
+
+        async def _envelopes():
+            yield ActorEnvelope(
+                protocol_version="v1",
+                message_id="msg-remote-abort-1",
+                execution_id="exec-remote-abort",
+                sender_actor_id="worker_remote/exec-remote-abort",
+                recipient_actor_id="host",
+                mailbox="child_events",
+                seq=1,
+                kind="child_event",
+                payload={
+                    "event": event_to_dict(
+                        AssistantMessage(
+                            text="remote child waiting",
+                            agent_name=request.agent_name,
+                            parent_tool_use_id=request.parent_tool_use_id,
+                        )
+                    )
+                },
+                ts=1.0,
+            )
+            self.child_started.set()
+            await self._abort_requested.wait()
+            yield ActorEnvelope(
+                protocol_version="v1",
+                message_id="msg-remote-abort-2",
+                execution_id="exec-remote-abort",
+                sender_actor_id="worker_remote/exec-remote-abort",
+                recipient_actor_id="host",
+                mailbox="child_events",
+                seq=2,
+                kind="down",
+                payload=ActorDownEvent(
+                    execution_id="exec-remote-abort",
+                    actor_id="worker_remote/exec-remote-abort",
+                    reason_kind="aborted",
+                    reason_detail="host_abort",
+                    final_state="aborted",
+                    dispatch_mode="k3s",
+                    child_session_id="f" * 32,
+                    target_node=request.definition.executor.node_name or "",
+                    worker_execution_id="exec-remote-abort",
+                ).to_payload(),
+                ts=2.0,
+            )
+
+        async def _abort() -> None:
+            self.abort_calls += 1
+            self._abort_requested.set()
+
+        return request.make_handle(
+            child_session_id="f" * 32,
+            target_node=request.definition.executor.node_name or "",
+            git_revision=request.git_revision,
+            worker_execution_id="exec-remote-abort",
+            envelopes=_envelopes(),
+            aborter=_abort,
+        )
+
+
 class RemoteTaskNoOutputProvider:
     name = "fake-no-output"
 
@@ -166,6 +240,41 @@ class RemoteTaskNoOutputProvider:
         user_text = next((m.get("content") for m in messages if m.get("role") == "user"), "")
 
         if isinstance(user_text, str) and user_text.startswith("PARENT_REMOTE_NO_OUTPUT:") and not any(m.get("role") == "tool" for m in messages):
+            return ModelOutput(
+                assistant_text=None,
+                tool_calls=[
+                    ToolCall(
+                        tool_use_id="call_task",
+                        name="Task",
+                        arguments={"agent": "worker_remote", "prompt": "Do remote child work"},
+                    )
+                ],
+                usage=None,
+                raw=None,
+            )
+
+        if any(m.get("role") == "tool" for m in messages):
+            tool_payload = next((m.get("content") for m in reversed(messages) if m.get("role") == "tool"), "")
+            tool_obj = json.loads(tool_payload) if isinstance(tool_payload, str) and tool_payload else {}
+            if isinstance(tool_obj, dict) and tool_obj.get("is_error") is True:
+                return ModelOutput(assistant_text="parent remote saw task failure", tool_calls=[], usage=None, raw=None)
+            return ModelOutput(assistant_text="parent remote unexpectedly saw success", tool_calls=[], usage=None, raw=None)
+
+        return ModelOutput(assistant_text="unexpected", tool_calls=[], usage=None, raw=None)
+
+
+class RemoteTaskAbortProvider:
+    name = "fake-remote-abort"
+
+    async def complete(self, *, model, messages, tools=(), api_key=None):
+        _ = model
+        _ = tools
+        _ = api_key
+        user_text = next((m.get("content") for m in messages if m.get("role") == "user"), "")
+
+        if isinstance(user_text, str) and user_text.startswith("PARENT_REMOTE_ABORT:") and not any(
+            m.get("role") == "tool" for m in messages
+        ):
             return ModelOutput(
                 assistant_text=None,
                 tool_calls=[
@@ -425,6 +534,60 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task_result.is_error)
         self.assertEqual(task_result.output["down"]["reason_kind"], "transport_lost")
         self.assertEqual(task_result.output["supervisor"]["action"], "fail_parent_tool_use")
+        self.assertEqual(getattr(events[-1], "final_text", None), "parent remote saw task failure")
+
+    async def test_k3s_agent_surfaces_structured_down_when_host_aborts_remote_child(self) -> None:
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            root = sandbox / "repo"
+            root.mkdir()
+            self._init_git_repo(root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            dispatcher = AbortableRemoteDispatcher()
+            abort_event = asyncio.Event()
+
+            options = OpenAgenticOptions(
+                provider=RemoteTaskAbortProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                remote_task_dispatcher=dispatcher,
+                abort_event=abort_event,
+                agents={
+                    "worker_remote": AgentDefinition(
+                        description="remote child",
+                        prompt="REMOTE_CHILD_DEF",
+                        tools=("Read", "Grep"),
+                        executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                        workspace=AgentWorkspaceDefinition(mode="readonly"),
+                        worker=AgentWorkerDefinition(profile="py311"),
+                    )
+                },
+            )
+
+            import openagentic_sdk
+
+            events = []
+
+            async def _run_query() -> None:
+                async for e in openagentic_sdk.query(prompt="PARENT_REMOTE_ABORT: delegate", options=options):
+                    events.append(e)
+
+            task = asyncio.create_task(_run_query())
+            await asyncio.wait_for(dispatcher.child_started.wait(), timeout=1.0)
+            abort_event.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        self.assertEqual(len(dispatcher.requests), 1)
+        self.assertEqual(dispatcher.abort_calls, 1)
+        task_result = next(
+            event for event in events if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+        )
+        self.assertTrue(task_result.is_error)
+        self.assertEqual(task_result.output["down"]["reason_kind"], "aborted")
         self.assertEqual(getattr(events[-1], "final_text", None), "parent remote saw task failure")
 
     def _init_git_repo(self, root: Path) -> None:

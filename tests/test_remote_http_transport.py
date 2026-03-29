@@ -21,6 +21,8 @@ from openagentic_sdk.permissions.gate import PermissionGate
 from openagentic_sdk.providers.base import ModelOutput
 from openagentic_sdk.remote_cluster_config import ResolvedRemoteProviderSpec
 from openagentic_sdk.sessions.store import FileSessionStore
+from openagentic_sdk.subagents.actor_lifecycle import ActorDownEvent
+from openagentic_sdk.subagents.actor_protocol import ActorEnvelope
 from openagentic_sdk.subagents.remote_types import RemoteTaskRequest
 from openagentic_sdk.tools.registry import ToolRegistry
 
@@ -72,8 +74,135 @@ class FailingBaseProvider:
 
 
 class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
+    async def test_http_remote_worker_server_forwards_control_envelope_to_child_handle(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteActorTransport, RemoteTaskHttpWorkerServer
+
+        sent_event = threading.Event()
+        sent_envelopes: list[ActorEnvelope] = []
+
+        class ControllableRemoteTaskWorker:
+            def __init__(self, *, base_options, session_store) -> None:
+                _ = (base_options, session_store)
+
+            async def dispatch(self, request):
+                async def _envelopes():
+                    await asyncio.to_thread(sent_event.wait)
+                    yield ActorEnvelope(
+                        protocol_version="v1",
+                        message_id="msg-down",
+                        execution_id="exec-control-1",
+                        sender_actor_id="worker_remote/exec-control-1",
+                        recipient_actor_id="host",
+                        mailbox="child_events",
+                        seq=1,
+                        kind="down",
+                        payload=ActorDownEvent(
+                            execution_id="exec-control-1",
+                            actor_id="worker_remote/exec-control-1",
+                            reason_kind="normal",
+                            reason_detail="stop_reason=end",
+                            final_state="exited",
+                            dispatch_mode="k3s",
+                            child_session_id="f" * 32,
+                            target_node=request.definition.executor.node_name or "",
+                            worker_execution_id="exec-control-1",
+                        ).to_payload(),
+                        ts=1.0,
+                    )
+
+                async def _send(envelope: ActorEnvelope) -> None:
+                    sent_envelopes.append(envelope)
+                    sent_event.set()
+
+                return request.make_handle(
+                    child_session_id="f" * 32,
+                    target_node=request.definition.executor.node_name or "",
+                    git_revision=request.git_revision,
+                    worker_execution_id="exec-control-1",
+                    envelopes=_envelopes(),
+                    sender=_send,
+                )
+
+        with TemporaryDirectory() as td:
+            sandbox = Path(td)
+            repo_root = sandbox / "repo"
+            repo_root.mkdir()
+            self._init_git_repo(repo_root)
+            git_revision = self._git_head(repo_root)
+            store = FileSessionStore(root_dir=sandbox / "session_home")
+            definition = AgentDefinition(
+                description="remote child",
+                prompt="REMOTE_HTTP_DEF: follow instructions",
+                tools=("Read",),
+                executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
+                workspace=AgentWorkspaceDefinition(mode="readonly"),
+            )
+            base_options = OpenAgenticOptions(
+                provider=HttpWorkerChildProvider(),
+                model="fake",
+                api_key="x",
+                cwd=str(repo_root),
+                project_dir=str(repo_root),
+                tools=ToolRegistry([]),
+                permission_gate=PermissionGate(permission_mode="bypass"),
+                session_store=store,
+                agents={"worker_remote": definition},
+            )
+            with mock.patch("openagentic_sdk.subagents.remote_http.InProcessRemoteTaskWorker", ControllableRemoteTaskWorker):
+                worker_server = RemoteTaskHttpWorkerServer(
+                    base_options=base_options,
+                    session_store=store,
+                    repo_root=str(repo_root),
+                    node_name="node-http",
+                    host="127.0.0.1",
+                    port=0,
+                )
+                httpd = worker_server.make_server()
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    transport = HttpRemoteActorTransport(base_url=f"http://127.0.0.1:{httpd.server_address[1]}")
+                    request = RemoteTaskRequest(
+                        parent_session_id="f" * 32,
+                        parent_tool_use_id="call_task",
+                        agent_name="worker_remote",
+                        prompt="Do remote child work",
+                        definition=definition,
+                        cwd=str(repo_root),
+                        project_dir=str(repo_root),
+                        git_revision=git_revision,
+                    )
+
+                    handle = await transport.spawn(request)
+                    control = ActorEnvelope(
+                        protocol_version="v1",
+                        message_id="msg-control",
+                        execution_id="exec-control-1",
+                        sender_actor_id="host",
+                        recipient_actor_id="worker_remote/exec-control-1",
+                        mailbox="control",
+                        seq=1,
+                        kind="control",
+                        payload={"op": "ping"},
+                        ts=1.0,
+                    )
+                    await transport.send(handle, control)
+                    child_events = [event async for event in handle.events]
+                    down = await asyncio.wait_for(handle.down_future, timeout=1.0)
+                    await transport.close(handle)
+                finally:
+                    httpd.shutdown()
+                    httpd.server_close()
+                    thread.join(timeout=5.0)
+
+        self.assertTrue(sent_event.wait(timeout=1.0))
+        self.assertEqual(len(sent_envelopes), 1)
+        self.assertEqual(child_events, [])
+        self.assertEqual(sent_envelopes[0].kind, "control")
+        self.assertEqual(sent_envelopes[0].payload, {"op": "ping"})
+        self.assertEqual(down.reason_kind, "normal")
+
     async def test_http_remote_worker_dispatcher_surfaces_child_stream_failure_without_json_corruption(self) -> None:
-        from openagentic_sdk.subagents.actor_lifecycle import RemoteWorkerStreamError
         from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher, RemoteTaskHttpWorkerServer
 
         class FailingStreamRemoteTaskWorker:
@@ -148,18 +277,15 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
                     )
 
                     handle = await dispatcher.dispatch(request)
-                    with self.assertRaises(RuntimeError) as ctx:
-                        async for _event in handle.events:
-                            pass
+                    child_events = [event async for event in handle.events]
                     down = await asyncio.wait_for(handle.down_future, timeout=1.0)
                 finally:
                     httpd.shutdown()
                     httpd.server_close()
                     thread.join(timeout=5.0)
 
-        self.assertIsInstance(ctx.exception, RemoteWorkerStreamError)
-        self.assertIn("Remote task worker stream failed", str(ctx.exception))
-        self.assertIn("boom from child stream", str(ctx.exception))
+        self.assertEqual(len(child_events), 1)
+        self.assertEqual(getattr(child_events[0], "text", None), "remote child started")
         self.assertEqual(down.reason_kind, "remote_worker_error")
 
     async def test_http_remote_worker_dispatcher_survives_idle_gaps_after_headers(self) -> None:

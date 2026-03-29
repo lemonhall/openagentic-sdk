@@ -19,6 +19,8 @@ AGENT_A_NODE = f"k3d-{CLUSTER_NAME}-agent-0"
 AGENT_B_NODE = f"k3d-{CLUSTER_NAME}-agent-1"
 WORKER_A_DEPLOYMENT = "oa-remote-worker-agent-0"
 WORKER_B_DEPLOYMENT = "oa-remote-worker-agent-1"
+WORKER_A_SERVICE = "oa-remote-worker-agent-0"
+WORKER_B_SERVICE = "oa-remote-worker-agent-1"
 CHAT_HOST_DEPLOYMENT = "oa-cluster-chat-host"
 CHAT_HOST_SERVICE = "oa-cluster-chat-host"
 
@@ -114,6 +116,30 @@ def port_forward_chat_host():
         _stop_port_forward(proc)
 
 
+@contextmanager
+def port_forward_worker(node_name: str):
+    local_port = _pick_free_local_port()
+    proc = subprocess.Popen(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
+            "port-forward",
+            f"service/{_worker_service_for(node_name)}",
+            f"{local_port}:{WORKER_PORT}",
+        ],
+        cwd=repo_root(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_for_port_forward(proc, local_port)
+        yield f"http://127.0.0.1:{local_port}"
+    finally:
+        _stop_port_forward(proc)
+
+
 def _cluster_exists() -> bool:
     proc = _run(["k3d", "cluster", "list"], check=False)
     if proc.returncode != 0:
@@ -126,6 +152,14 @@ def _cluster_exists() -> bool:
         if name == CLUSTER_NAME:
             return True
     return False
+
+
+def _worker_service_for(node_name: str) -> str:
+    if node_name == AGENT_A_NODE:
+        return WORKER_A_SERVICE
+    if node_name == AGENT_B_NODE:
+        return WORKER_B_SERVICE
+    raise ValueError(f"unknown worker node for port-forward: {node_name}")
 
 
 def _render_cluster_config(mirror_root: Path) -> Path:

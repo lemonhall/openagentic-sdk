@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 from ..events import Result
 
@@ -34,6 +34,29 @@ class ActorDownEvent:
             for key, value in asdict(self).items()
             if isinstance(value, str) and value
         }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ActorDownEvent":
+        execution_id = payload.get("execution_id")
+        actor_id = payload.get("actor_id")
+        reason_kind = payload.get("reason_kind")
+        final_state = payload.get("final_state")
+        dispatch_mode = payload.get("dispatch_mode")
+        if not all(isinstance(item, str) and item for item in (execution_id, actor_id, reason_kind, final_state, dispatch_mode)):
+            raise ValueError("invalid actor down payload")
+        return cls(
+            execution_id=execution_id,
+            actor_id=actor_id,
+            reason_kind=reason_kind,
+            final_state=final_state,
+            dispatch_mode=dispatch_mode,
+            reason_detail=payload.get("reason_detail") if isinstance(payload.get("reason_detail"), str) else None,
+            child_session_id=payload.get("child_session_id") if isinstance(payload.get("child_session_id"), str) else None,
+            target_node=payload.get("target_node") if isinstance(payload.get("target_node"), str) else None,
+            worker_execution_id=payload.get("worker_execution_id")
+            if isinstance(payload.get("worker_execution_id"), str)
+            else None,
+        )
 
 
 def classify_child_result_down(

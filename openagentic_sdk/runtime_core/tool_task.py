@@ -137,16 +137,49 @@ class TaskToolMixin:
         handle: RemoteTaskDispatchHandle,
         outcome: _AttemptOutcome,
     ) -> AsyncIterator[Any]:
+        receive_iter = handle.events
+        next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
+        abort_task = asyncio.create_task(self._wait_for_abort_event()) if self._should_watch_abort() else None
         try:
-            async for child_event in handle.events:
+            while True:
+                pending = {next_task}
+                if abort_task is not None:
+                    pending.add(abort_task)
+                done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if abort_task is not None and abort_task in done:
+                    outcome.abort_consumed = True
+                    abort_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await abort_task
+                    abort_task = None
+                    await handle.abort()
+                    continue
+                if next_task not in done:
+                    continue
+                child_event = next_task.result()
+                if child_event is _STREAM_END:
+                    break
                 store.append_event(session_id, child_event)
                 yield child_event
                 if isinstance(child_event, Result):
                     outcome.child_final_text = child_event.final_text
                     outcome.child_stop_reason = child_event.stop_reason
+                next_task = asyncio.create_task(anext(receive_iter, _STREAM_END))
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            if not next_task.done():
+                next_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await next_task
+            if abort_task is not None:
+                abort_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await abort_task
+            await handle.close()
         outcome.down = await handle.down_future
+        if outcome.abort_consumed:
+            self._clear_abort_event()
         self._record_remote_down(outcome.down)
 
     async def _iter_local_attempt(

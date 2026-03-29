@@ -18,9 +18,11 @@
 做：
 
 - 把 remote HTTP transport 改造成 actor transport adapter
+- 让 remote transport 显式实现 `spawn / send / receive / abort / close`
 - 引入 remote replay / ack / reconnect contract
 - 让 remote worker 对 child lifecycle 产出结构化 `down`
 - 保持外层 `Task` 兼容语义
+- 让 host abort remote child 时仍走结构化 `down`
 
 不做：
 
@@ -34,28 +36,36 @@
 - remote replay 的主键必须是 `execution_id + mailbox + seq`。
 - ACK 语义应以 host 实际消费到的 mailbox cursor 为准，而不是 transport socket 读到了多少字节。
 - remote worker stream 中断后，host 不能丢失“已经收到多少、还缺多少、child 当前是否已结束”的认知。
+- remote `send` 必须落到显式 `/send` actor endpoint，而不是继续把 control 语义塞进 ad-hoc query params 或隐藏副作用里。
+- remote abort 仍可保留独立 `/abort` 入口，但 host 侧 `Task` 必须和本地模式一样监听 `abort_event`，不能只在 local transport 生效。
 
 ## Acceptance (DoD)
 
 必须全部满足：
 
-1. `python -m unittest -q tests.test_actor_http_transport tests.test_actor_remote_replay tests.test_remote_http_transport tests.test_remote_task_dispatch`
+1. `python -m unittest -q tests.test_actor_http_transport tests.test_actor_remote_replay tests.test_remote_http_transport tests.test_remote_task_dispatch tests.test_k3d_dispatcher`
 2. `wsl -u root -e bash -lc 'su - lemonhall -c "cd /mnt/e/development/openagentic-sdk && python -m unittest discover -s e2e_k3d_tests -p \"e2e_remote_actor_*.py\" -v"'`
-3. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py --config ruff.toml`
+3. `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
 4. 反作弊条款：
    - 不允许 reconnect 后靠“重新跑一遍整个 child task”冒充 replay
    - 不允许 remote stream 断了以后只给一个通用 RuntimeError，而没有结构化 `down`
+   - 不允许 remote transport 号称 actor 化了，却仍然没有 `send()` / control mailbox 入口
+   - 不允许 host abort 只能中断本地 child，而 remote child 继续跑
 
 ## Files
 
 - Modify: `openagentic_sdk/subagents/remote_http.py`
 - Modify: `openagentic_sdk/subagents/remote_worker.py`
 - Modify: `openagentic_sdk/subagents/remote_types.py`
+- Modify: `openagentic_sdk/subagents/actor_lifecycle.py`
 - Modify: `openagentic_sdk/runtime_core/tool_task.py`
+- Modify: `openagentic_sdk/subagents/k3d_dispatcher.py`
 - Modify: `tests/test_remote_http_transport.py`
 - Modify: `tests/test_remote_task_dispatch.py`
+- Modify: `e2e_k3d_tests/_harness.py`
 - Create: `tests/test_actor_http_transport.py`
 - Create: `tests/test_actor_remote_replay.py`
+- Create: `tests/test_k3d_dispatcher.py`
 - Create: `e2e_k3d_tests/e2e_remote_actor_basic.py`
 - Create: `e2e_k3d_tests/e2e_remote_actor_reconnect.py`
 
@@ -65,7 +75,7 @@
 
 `tests.test_actor_http_transport` 至少覆盖：
 
-- `spawn` / `receive` / `abort` 都通过 actor envelope 驱动
+- `spawn` / `send` / `receive` / `abort` 都通过 actor envelope 驱动
 - child event 不再裸露为 transport-specific JSON line
 
 ### Contract B — replay / reconnect 正常工作
@@ -118,5 +128,11 @@
 
 - Date: 2026-03-29
 - Env: Windows 11 + PowerShell 7.x
-- Status: planned；not yet executed
-
+- Local verification:
+  - `python -m unittest -q tests.test_actor_http_transport tests.test_actor_remote_replay tests.test_remote_http_transport tests.test_remote_task_dispatch tests.test_k3d_dispatcher`
+  - `python -m unittest -q`
+  - `ruff check openagentic_sdk/subagents openagentic_sdk/runtime_core/tool_task.py tests/test_actor_http_transport.py tests/test_actor_remote_replay.py tests/test_remote_http_transport.py tests/test_remote_task_dispatch.py tests/test_k3d_dispatcher.py e2e_k3d_tests/e2e_remote_actor_basic.py e2e_k3d_tests/e2e_remote_actor_reconnect.py e2e_k3d_tests/_harness.py --config ruff.toml`
+- k3d e2e status:
+  - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect`
+  - Result in current shell: skipped (`missing required tool: docker`)
+- Status: implemented locally；k3d smoke/reconnect tests已补齐，待 docker-enabled 环境实跑

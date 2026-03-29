@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 
 from ..options import OpenAgenticOptions
 from ..sessions.store import FileSessionStore
+from .actor_local_transport import LocalActorTransport
+from .actor_mailbox import ActorMailboxStore
+from .actor_protocol import ActorEnvelope
+from .actor_registry import ActorExecutionRegistry
+from .actor_transport import ActorSpawnSpec
 from .readonly_policy import build_remote_allowed_tools
 from .remote_types import RemoteTaskDispatchHandle, RemoteTaskRequest
 from .session_meta import build_child_session_metadata
@@ -75,15 +81,77 @@ class InProcessRemoteTaskWorker:
             parent_tool_use_id=request.parent_tool_use_id,
         )
         combined_prompt = request.definition.prompt + "\n\n" + request.prompt
+        child_actor_id = f"{request.agent_name}/{execution_id}"
+        actor_state: dict[str, object] = {}
 
-        async def _events():
-            async for event in child_runtime.query(combined_prompt):
-                yield event
+        async def _ensure_actor():
+            transport = actor_state.get("transport")
+            handle = actor_state.get("handle")
+            mailbox_store = actor_state.get("mailbox_store")
+            if isinstance(transport, LocalActorTransport) and handle is not None and isinstance(mailbox_store, ActorMailboxStore):
+                return transport, handle, mailbox_store
+
+            registry = ActorExecutionRegistry()
+            mailbox_store = ActorMailboxStore()
+            transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store)
+            handle = await transport.spawn(
+                ActorSpawnSpec(
+                    execution_id=execution_id,
+                    parent_actor_id="remote-host",
+                    child_actor_id=child_actor_id,
+                    agent_name=request.agent_name,
+                    dispatch_mode=request.definition.executor.kind,
+                    child_session_id=child_session_id,
+                    run=lambda _control_messages: child_runtime.query(combined_prompt),
+                )
+            )
+            actor_state["transport"] = transport
+            actor_state["handle"] = handle
+            actor_state["mailbox_store"] = mailbox_store
+            return transport, handle, mailbox_store
+
+        async def _envelopes():
+            transport, handle, mailbox_store = await _ensure_actor()
+            try:
+                async for envelope in transport.receive(handle):
+                    yield envelope
+                down = await handle.down_future
+                yield ActorEnvelope(
+                    protocol_version="v1",
+                    message_id=uuid.uuid4().hex,
+                    execution_id=execution_id,
+                    sender_actor_id=child_actor_id,
+                    recipient_actor_id="remote-host",
+                    mailbox=handle.event_mailbox,
+                    seq=mailbox_store.next_seq(execution_id, handle.event_mailbox),
+                    kind="down",
+                    payload=down.to_payload(),
+                    ts=asyncio.get_running_loop().time(),
+                )
+            finally:
+                await transport.close(handle)
+
+        async def _abort() -> None:
+            transport, handle, _mailbox_store = await _ensure_actor()
+            await transport.abort(handle)
+
+        async def _send(envelope: ActorEnvelope) -> None:
+            transport, handle, _mailbox_store = await _ensure_actor()
+            await transport.send(handle, envelope)
+
+        async def _close() -> None:
+            transport = actor_state.get("transport")
+            handle = actor_state.get("handle")
+            if isinstance(transport, LocalActorTransport) and handle is not None:
+                await transport.close(handle)
 
         return request.make_handle(
             child_session_id=child_session_id,
             target_node=request.definition.executor.node_name or "",
             git_revision=request.git_revision,
             worker_execution_id=execution_id,
-            events=_events(),
+            envelopes=_envelopes(),
+            sender=_send,
+            aborter=_abort,
+            closer=_close,
         )

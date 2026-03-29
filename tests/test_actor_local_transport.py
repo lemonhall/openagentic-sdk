@@ -64,7 +64,7 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_from_dict(envelopes[1].payload["event"]).final_text, "child ok")
         self.assertEqual(mailbox_store.head_seq("exec-1", "child_events"), 2)
         self.assertEqual(registry.get("exec-1").mailbox_heads["child_events"], 2)
-        self.assertEqual(registry.get("exec-1").state, "closed")
+        self.assertEqual(registry.get("exec-1").state, "exited")
         with self.assertRaises(KeyError):
             await anext(transport.receive(handle))
 
@@ -122,9 +122,73 @@ class TestActorLocalTransport(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mailbox_store.head_seq("exec-2", "control"), 1)
         self.assertEqual(registry.get("exec-2").mailbox_heads["control"], 1)
-        self.assertEqual(registry.get("exec-2").state, "closed")
+        self.assertEqual(registry.get("exec-2").state, "exited")
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(event_from_dict(envelopes[0].payload["event"]).text, "got noop")
+
+    async def test_send_ignores_duplicate_message_id_instead_of_delivering_twice(self) -> None:
+        from openagentic_sdk.subagents.actor_local_transport import LocalActorTransport
+        from openagentic_sdk.subagents.actor_mailbox import ActorMailboxStore
+        from openagentic_sdk.subagents.actor_protocol import ActorEnvelope
+        from openagentic_sdk.subagents.actor_registry import ActorExecutionRegistry
+        from openagentic_sdk.subagents.actor_transport import ActorSpawnSpec
+
+        registry = ActorExecutionRegistry()
+        mailbox_store = ActorMailboxStore()
+        transport = LocalActorTransport(registry=registry, mailbox_store=mailbox_store)
+
+        async def run_child(control_messages):
+            first = await anext(control_messages)
+            try:
+                second = await asyncio.wait_for(anext(control_messages), timeout=0.05)
+                count = 2
+                last_op = second.payload["op"]
+            except TimeoutError:
+                count = 1
+                last_op = first.payload["op"]
+            yield AssistantMessage(
+                text=f"count={count} op={last_op}",
+                agent_name="worker",
+                parent_tool_use_id="call_task",
+            )
+
+        handle = await transport.spawn(
+            ActorSpawnSpec(
+                execution_id="exec-3",
+                parent_actor_id="host",
+                child_actor_id="worker/exec-3",
+                agent_name="worker",
+                dispatch_mode="local",
+                child_session_id="child-session",
+                run=run_child,
+            )
+        )
+
+        duplicate = ActorEnvelope(
+            protocol_version="v1",
+            message_id="ctrl-dup",
+            execution_id="exec-3",
+            sender_actor_id="host",
+            recipient_actor_id="worker/exec-3",
+            mailbox="control",
+            seq=1,
+            kind="control",
+            payload={"op": "noop"},
+            ts=1.0,
+        )
+
+        await transport.send(handle, duplicate)
+        await transport.send(handle, duplicate)
+
+        envelopes = []
+        async for envelope in transport.receive(handle):
+            envelopes.append(envelope)
+        await transport.close(handle)
+
+        self.assertEqual(mailbox_store.head_seq("exec-3", "control"), 1)
+        self.assertEqual(registry.get("exec-3").mailbox_heads["control"], 1)
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(event_from_dict(envelopes[0].payload["event"]).text, "count=1 op=noop")
 
 
 async def _collect_events(transport, handle, out):  # noqa: ANN001

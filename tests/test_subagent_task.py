@@ -260,7 +260,7 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.execution_id, execution_id)
             self.assertEqual(record.agent_name, "worker")
             self.assertEqual(record.dispatch_mode, "local")
-            self.assertEqual(record.state, "closed")
+            self.assertEqual(record.state, "exited")
             self.assertEqual(record.mailbox_heads["child_events"], len(child_events))
 
     async def test_api_query_exposes_runtime_state_for_local_execution(self) -> None:
@@ -301,7 +301,7 @@ class TestSubagentTask(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(options.runtime_state.runtime)
             self.assertIs(options.runtime_state.actor_registry, options.runtime_state.runtime.actor_registry)
             self.assertIs(options.runtime_state.actor_mailbox_store, options.runtime_state.runtime.actor_mailbox_store)
-            self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "closed")
+            self.assertEqual(options.runtime_state.actor_registry.get(execution_id).state, "exited")
 
 
 if __name__ == "__main__":

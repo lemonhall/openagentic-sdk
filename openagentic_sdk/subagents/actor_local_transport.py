@@ -58,7 +58,8 @@ class LocalActorTransport:
         state = self._executions.get(handle.execution_id)
         if state is None:
             raise KeyError(f"unknown execution_id: {handle.execution_id}")
-        self._mailbox_store.append(envelope)
+        if not self._mailbox_store.append(envelope):
+            return
         self._registry.record_mailbox_head(
             handle.execution_id,
             mailbox=envelope.mailbox,
@@ -86,7 +87,6 @@ class LocalActorTransport:
             pass
         finally:
             self._executions.pop(handle.execution_id, None)
-            self._registry.update_state(handle.execution_id, "closed")
 
     async def _run_child(
         self,
@@ -111,7 +111,8 @@ class LocalActorTransport:
                     payload={"event": event_to_dict(event)},
                     ts=asyncio.get_running_loop().time(),
                 )
-                self._mailbox_store.append(envelope)
+                if not self._mailbox_store.append(envelope):
+                    continue
                 self._registry.record_mailbox_head(
                     spec.execution_id,
                     mailbox=spec.event_mailbox,

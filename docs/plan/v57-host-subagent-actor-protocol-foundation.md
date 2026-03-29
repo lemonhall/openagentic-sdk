@@ -2,7 +2,7 @@
 
 ## Goal
 
-为 host ↔ subagent 建立一层真正的 actor foundation，使 local subagent 与 remote subagent 都能站在同一个 execution / mailbox / envelope 语义之上；M1 只做基础协议、本地 transport 和兼容层，不做 supervisor restart 与远程 replay。
+为 host ↔ subagent 建立 actor foundation 的第一层本地基座：M1 把 local subagent 真正落到 execution / mailbox / envelope 语义上，并补齐顶层 API 的 host-authoritative 可观测入口；remote 侧在 M1 只保留兼容字段，不要求已经进入同一 transport / mailbox 语义。M1 不做 supervisor restart，也不做远程 replay。
 
 ## PRD Trace
 
@@ -21,12 +21,14 @@
 - 新增 actor envelope、mailbox store、execution registry 的核心数据结构
 - 新增统一的 `ActorTransport` 接口
 - 实现 local actor transport
+- 让 transport 层真正兑现 mailbox 的顺序与去重 contract，而不是只在 store 层“记账”
 - 让本地 `Task` child runtime 接到 actor foundation
 - 保持现有 `Task` 外层 tool 语义不变
 
 不做：
 
 - 不做 remote HTTP replay / reconnect
+- 不做 remote transport actor 化；remote 只保留与 execution_id 相关的兼容元数据入口
 - 不做 supervisor restart policy
 - 不做 cluster chat bridge 改造
 - 不做 group / pool / scheduler

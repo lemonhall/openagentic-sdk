@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 ActorDispatchMode = Literal["local", "k3s"]
-ActorExecutionState = Literal["created", "running", "exited", "failed", "aborted", "closed"]
+ActorExecutionState = Literal["created", "running", "exited", "failed", "aborted"]
 
 
 @dataclass(slots=True)

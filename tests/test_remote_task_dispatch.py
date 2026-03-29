@@ -1,7 +1,9 @@
 import asyncio
 import json
 import subprocess
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -299,6 +301,166 @@ class RemoteTaskAbortProvider:
 
 
 class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
+    async def test_k3s_agent_http_dispatcher_reconnects_same_remote_execution_without_redispatch(self) -> None:
+        from openagentic_sdk.subagents.remote_http import HttpRemoteTaskDispatcher
+
+        dispatch_bodies: list[dict[str, object]] = []
+        replay_queries: list[dict[str, list[str]]] = []
+        send_bodies: list[dict[str, object]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                if self.path == "/dispatch":
+                    length = int(self.headers.get("Content-Length") or "0")
+                    payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                    if isinstance(payload, dict):
+                        dispatch_bodies.append(payload)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("X-OA-Child-Session-ID", "b" * 32)
+                    self.send_header("X-OA-Target-Node", "node-a")
+                    self.send_header("X-OA-Git-Revision", "rev-http-reconnect")
+                    self.send_header("X-OA-Worker-Execution-ID", "exec-http-reconnect")
+                    self.send_header("X-OA-Execution-ID", "exec-http-reconnect")
+                    self.end_headers()
+                    first = _child_event_envelope(
+                        execution_id="exec-http-reconnect",
+                        seq=1,
+                        actor_id="worker_remote/exec-http-reconnect",
+                        parent_actor_id="host",
+                        event=AssistantMessage(
+                            text="remote child says hi",
+                            agent_name="worker_remote",
+                            parent_tool_use_id="call_task",
+                        ),
+                    )
+                    self.wfile.write(json.dumps(first.to_dict(), ensure_ascii=False).encode("utf-8") + b"\n")
+                    self.wfile.flush()
+                    self.connection.shutdown(1)
+                    return
+
+                if self.path == "/send":
+                    length = int(self.headers.get("Content-Length") or "0")
+                    payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                    if isinstance(payload, dict):
+                        send_bodies.append(payload)
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+
+                self.send_response(404)
+                self.end_headers()
+
+            def do_GET(self):  # noqa: N802
+                from urllib.parse import parse_qs, urlparse
+
+                parsed = urlparse(self.path)
+                if parsed.path != "/stream":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                query = parse_qs(parsed.query)
+                replay_queries.append(query)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.end_headers()
+                second = _child_event_envelope(
+                    execution_id="exec-http-reconnect",
+                    seq=2,
+                    actor_id="worker_remote/exec-http-reconnect",
+                    parent_actor_id="host",
+                    event=Result(
+                        final_text="remote child done after reconnect",
+                        session_id="b" * 32,
+                        agent_name="worker_remote",
+                        parent_tool_use_id="call_task",
+                    ),
+                )
+                down = _down_envelope(
+                    execution_id="exec-http-reconnect",
+                    seq=3,
+                    actor_id="worker_remote/exec-http-reconnect",
+                    parent_actor_id="host",
+                    down=ActorDownEvent(
+                        execution_id="exec-http-reconnect",
+                        actor_id="worker_remote/exec-http-reconnect",
+                        reason_kind="normal",
+                        reason_detail="stop_reason=end",
+                        final_state="exited",
+                        dispatch_mode="k3s",
+                        child_session_id="b" * 32,
+                        target_node="node-a",
+                        worker_execution_id="exec-http-reconnect",
+                    ),
+                )
+                for envelope in (second, down):
+                    self.wfile.write(json.dumps(envelope.to_dict(), ensure_ascii=False).encode("utf-8") + b"\n")
+                    self.wfile.flush()
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+                _ = (format, args)
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with TemporaryDirectory() as td:
+                sandbox = Path(td)
+                root = sandbox / "repo"
+                root.mkdir()
+                self._init_git_repo(root)
+                store = FileSessionStore(root_dir=sandbox / "session_home")
+
+                options = OpenAgenticOptions(
+                    provider=RemoteTaskProvider(),
+                    model="fake",
+                    api_key="x",
+                    cwd=str(root),
+                    tools=ToolRegistry([]),
+                    permission_gate=PermissionGate(permission_mode="bypass"),
+                    session_store=store,
+                    remote_task_dispatcher=HttpRemoteTaskDispatcher(
+                        base_url=f"http://127.0.0.1:{httpd.server_address[1]}",
+                    ),
+                    agents={
+                        "worker_remote": AgentDefinition(
+                            description="remote child",
+                            prompt="REMOTE_CHILD_DEF",
+                            tools=("Read", "Grep"),
+                            executor=AgentExecutorDefinition(kind="k3s", node_name="node-a"),
+                            workspace=AgentWorkspaceDefinition(mode="readonly"),
+                            worker=AgentWorkerDefinition(profile="py311"),
+                        )
+                    },
+                )
+
+                import openagentic_sdk
+
+                events = []
+                async for e in openagentic_sdk.query(prompt="PARENT_REMOTE: delegate", options=options):
+                    events.append(e)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5.0)
+
+        self.assertEqual(len(dispatch_bodies), 1)
+        self.assertTrue(isinstance(dispatch_bodies[0].get("worker_execution_id"), str) and dispatch_bodies[0].get("worker_execution_id"))
+        self.assertTrue(replay_queries)
+        self.assertEqual(replay_queries[0].get("execution_id"), ["exec-http-reconnect"])
+        self.assertEqual(replay_queries[0].get("after_seq"), ["1"])
+        self.assertEqual(replay_queries[0].get("mailbox"), ["child_events"])
+        self.assertTrue(send_bodies)
+        self.assertEqual(send_bodies[0].get("kind"), "ack")
+        task_result = next(
+            event for event in events if getattr(event, "type", None) == "tool.result" and getattr(event, "tool_use_id", None) == "call_task"
+        )
+        self.assertFalse(task_result.is_error)
+        self.assertEqual(task_result.output["execution_id"], "exec-http-reconnect")
+        self.assertEqual(task_result.output["worker_execution_id"], "exec-http-reconnect")
+        self.assertEqual(task_result.output["final_text"], "remote child done after reconnect")
+        self.assertEqual(getattr(events[-1], "final_text", None), "parent remote ok")
+
     async def test_k3s_agent_uses_remote_dispatcher_and_streams_child_events(self) -> None:
         with TemporaryDirectory() as td:
             sandbox = Path(td)
@@ -597,6 +759,50 @@ class TestRemoteTaskDispatch(unittest.IsolatedAsyncioTestCase):
         (root / "README.md").write_text("hello\n", encoding="utf-8")
         subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", "init"], cwd=root, check=True, capture_output=True, text=True)
+
+
+def _child_event_envelope(
+    *,
+    execution_id: str,
+    seq: int,
+    actor_id: str,
+    parent_actor_id: str,
+    event: AssistantMessage | Result,
+) -> ActorEnvelope:
+    return ActorEnvelope(
+        protocol_version="v1",
+        message_id=f"msg-{seq}",
+        execution_id=execution_id,
+        sender_actor_id=actor_id,
+        recipient_actor_id=parent_actor_id,
+        mailbox="child_events",
+        seq=seq,
+        kind="child_event",
+        payload={"event": event_to_dict(event)},
+        ts=float(seq),
+    )
+
+
+def _down_envelope(
+    *,
+    execution_id: str,
+    seq: int,
+    actor_id: str,
+    parent_actor_id: str,
+    down: ActorDownEvent,
+) -> ActorEnvelope:
+    return ActorEnvelope(
+        protocol_version="v1",
+        message_id=f"msg-{seq}",
+        execution_id=execution_id,
+        sender_actor_id=actor_id,
+        recipient_actor_id=parent_actor_id,
+        mailbox="child_events",
+        seq=seq,
+        kind="down",
+        payload=down.to_payload(),
+        ts=float(seq),
+    )
 
 
 if __name__ == "__main__":

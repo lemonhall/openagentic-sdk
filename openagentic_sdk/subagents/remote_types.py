@@ -21,6 +21,7 @@ class RemoteTaskDispatchHandle:
     down_future: asyncio.Future[ActorDownEvent]
     envelopes: AsyncIterator[ActorEnvelope] | None = None
     sender: Callable[[ActorEnvelope], Awaitable[None]] | None = None
+    acker: Callable[[ActorEnvelope], Awaitable[None]] | None = None
     aborter: Callable[[], Awaitable[None]] | None = None
     closer: Callable[[], Awaitable[None]] | None = None
 
@@ -40,6 +41,10 @@ class RemoteTaskDispatchHandle:
             await self.abort()
             return
         raise RuntimeError("remote task handle does not support send")
+
+    async def ack(self, envelope: ActorEnvelope) -> None:
+        if self.acker is not None:
+            await self.acker(envelope)
 
     async def close(self) -> None:
         if self.closer is not None:
@@ -68,6 +73,7 @@ class RemoteTaskRequest:
         events: AsyncIterator[Any] | None = None,
         envelopes: AsyncIterator[ActorEnvelope] | None = None,
         sender: Callable[[ActorEnvelope], Awaitable[None]] | None = None,
+        acker: Callable[[ActorEnvelope], Awaitable[None]] | None = None,
         aborter: Callable[[], Awaitable[None]] | None = None,
         closer: Callable[[], Awaitable[None]] | None = None,
     ) -> RemoteTaskDispatchHandle:
@@ -119,6 +125,8 @@ class RemoteTaskRequest:
                         if envelope.kind == "down" and isinstance(envelope.payload, dict):
                             _resolve_down(down_future, ActorDownEvent.from_payload(envelope.payload))
                         yield envelope
+                        if acker is not None:
+                            await acker(envelope)
                 except Exception as exc:  # noqa: BLE001
                     _resolve_down(
                         down_future,
@@ -168,6 +176,7 @@ class RemoteTaskRequest:
                 down_future=down_future,
                 envelopes=tracked_envelopes,
                 sender=sender,
+                acker=acker,
                 aborter=aborter,
                 closer=closer,
             )
@@ -180,6 +189,7 @@ class RemoteTaskRequest:
             events=_event_stream(events),
             down_future=down_future,
             sender=sender,
+            acker=acker,
             aborter=aborter,
             closer=closer,
         )

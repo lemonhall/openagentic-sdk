@@ -33,9 +33,9 @@
 ## Implementation Notes
 
 - 现有 `RemoteTaskRequest` / `RemoteTaskDispatchHandle` 更像 RPC handle；M3 需要把它们重构成 actor transport 兼容对象，而不是继续堆字段。
-- 当前实现里的 replay cursor 是 `execution_id + after_seq`，默认只覆盖 `child_events` mailbox；尚未扩展成 mailbox 粒度 cursor。
-- 当前实现没有独立的显式 ACK envelope；cursor 在 envelope 被 transport 交付给上层迭代器后推进，还不是“host 持久化完成后再 ACK”的严格语义。
-- 当前实现已解决“远端 stream 断一下，transport client 不知道从哪里继续”的问题；但 k3d e2e 目前证明的是 worker transport replay，本轮还没有 host `Task` 路径的自动 reconnect smoke。
+- 当前实现里的 replay cursor 已带 `mailbox` 参数；本轮 slice 仍只覆盖 `child_events` mailbox，不扩展到多 mailbox cursor。
+- 当前实现已引入显式 ACK envelope：transport client 在上层恢复迭代后经 `/send` 回 ACK；对 host `Task` 路径，这条 ACK 发生在 child event 已写入 session store 之后。
+- 当前实现已解决“远端 stream 断一下，transport client 不知道从哪里继续”的问题，并补了 host `Task` 走 `HttpRemoteTaskDispatcher` 的自动 reconnect 本地 smoke；k3d e2e 仍主要证明 worker transport replay。
 - remote `send` 必须落到显式 `/send` actor endpoint，而不是继续把 control 语义塞进 ad-hoc query params 或隐藏副作用里。
 - remote abort 仍可保留独立 `/abort` 入口，但 host 侧 `Task` 必须和本地模式一样监听 `abort_event`，不能只在 local transport 生效。
 
@@ -83,7 +83,8 @@
 `tests.test_actor_remote_replay` 至少覆盖：
 
 - transport client 消费到某个 `seq` 后连接中断
-- reconnect 后从下一个未确认 `seq` 继续
+- reconnect 后从 `mailbox + after_seq` 指定的最后 ACK 点继续
+- transport client 会发送显式 `ack` envelope 到 `/send`
 - duplicate `message_id` 不会造成重复 child event
 - 当前合同只覆盖 `child_events` 单 mailbox，不覆盖多 mailbox cursor
 
@@ -95,6 +96,14 @@
 - 随后的 `/stream?execution_id=...&after_seq=...` 能继续 replay
 - 不出现乱序 / 重复 / 静默吞消息
 - 当前不覆盖 host `Task` 自动 reconnect / replay
+
+### Contract D — host `Task` 自动 reconnect 不重派发
+
+`tests.test_remote_task_dispatch` 至少覆盖：
+
+- host 通过 `HttpRemoteTaskDispatcher` 派发远程 child，只发起一次 `/dispatch`
+- 首个 stream 中断后，host 自动走 `/stream?execution_id=...&mailbox=child_events&after_seq=...`
+- 最终 parent 仍拿到完整 child result 与结构化 `tool.result`
 
 ## Steps
 
@@ -138,7 +147,6 @@
   - `python -m unittest -v e2e_k3d_tests.e2e_remote_actor_basic e2e_k3d_tests.e2e_remote_actor_reconnect`
   - Result in current shell: skipped (`missing required tool: docker`)
 - Remaining gaps vs broader v57 intent:
-  - replay 仍是 `child_events` 单 mailbox，而不是 mailbox 粒度 cursor
-  - ACK 仍是隐式消费 cursor，而不是显式 post-persist ACK
-  - k3d reconnect e2e 目前证明的是 worker transport replay，不是 host `Task` 自动 reconnect
-- Status: implemented locally as current M3 slice；k3d worker replay smoke 已补齐，待 docker-enabled 环境实跑
+  - 当前 replay/ACK 合同只覆盖 `child_events` 单 mailbox，不扩展到多 mailbox cursor
+  - docker-enabled 环境下的 k3d M3 e2e 仍待实跑
+- Status: implemented locally as current M3 slice；显式 ACK、mailbox replay、host `Task` 自动 reconnect 本地验证已补齐，待 docker-enabled 环境实跑

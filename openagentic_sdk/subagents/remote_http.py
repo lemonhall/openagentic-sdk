@@ -38,6 +38,7 @@ class _ServerExecutionState:
     worker_execution_id: str | None
     handle: RemoteTaskDispatchHandle
     envelopes: list[ActorEnvelope] = field(default_factory=list)
+    ack_heads: dict[str, int] = field(default_factory=dict)
     done: bool = False
     saw_down: bool = False
     error: Exception | None = None
@@ -56,6 +57,12 @@ class _ServerExecutionState:
             self.error = error
             self.condition.notify_all()
 
+    def record_ack(self, *, mailbox: str, acked_seq: int) -> None:
+        with self.condition:
+            current = self.ack_heads.get(mailbox, 0)
+            if acked_seq > current:
+                self.ack_heads[mailbox] = acked_seq
+
 
 class HttpRemoteActorTransport:
     def __init__(self, *, base_url: str, timeout_s: float = 60.0) -> None:
@@ -73,11 +80,12 @@ class HttpRemoteActorTransport:
             response.close()
             raise RuntimeError("Remote actor dispatch returned incomplete metadata headers")
         _disable_response_read_timeout(response)
+        execution_id = worker_execution_id or child_session_id
+        acked_heads: dict[str, int] = {}
 
         async def _envelopes():
             seen_message_ids: set[str] = set()
             current_response = response
-            after_seq = 0
             stalled_reconnects = 0
             while True:
                 saw_progress = False
@@ -86,7 +94,6 @@ class HttpRemoteActorTransport:
                         if envelope.message_id in seen_message_ids:
                             continue
                         seen_message_ids.add(envelope.message_id)
-                        after_seq = max(after_seq, envelope.seq)
                         saw_progress = True
                         yield envelope
                         if envelope.kind == "down":
@@ -97,13 +104,17 @@ class HttpRemoteActorTransport:
                 stalled_reconnects = 0 if saw_progress else stalled_reconnects + 1
                 if stalled_reconnects > 2:
                     raise ConnectionError("remote actor stream ended without down")
-                current_response = await self._open_stream(execution_id=worker_execution_id or child_session_id, after_seq=after_seq)
+                current_response = await self._open_stream(
+                    execution_id=execution_id,
+                    mailbox="child_events",
+                    after_seq=acked_heads.get("child_events", 0),
+                )
 
         async def _abort() -> None:
             await self._open_json_post(
                 path="/abort",
                 payload={
-                    "execution_id": worker_execution_id or child_session_id,
+                    "execution_id": execution_id,
                     "kind": "abort",
                 },
                 expect_json=False,
@@ -116,6 +127,29 @@ class HttpRemoteActorTransport:
                 expect_json=False,
             )
 
+        async def _ack(envelope: ActorEnvelope) -> None:
+            acked_seq = envelope.seq
+            mailbox = envelope.mailbox
+            if acked_heads.get(mailbox, 0) >= acked_seq:
+                return
+            await self._open_json_post(
+                path="/send",
+                payload=ActorEnvelope(
+                    protocol_version="v1",
+                    message_id=uuid.uuid4().hex,
+                    execution_id=execution_id,
+                    sender_actor_id="host",
+                    recipient_actor_id=envelope.sender_actor_id,
+                    mailbox=mailbox,
+                    seq=acked_seq,
+                    kind="ack",
+                    payload={"acked_seq": acked_seq, "mailbox": mailbox},
+                    ts=asyncio.get_running_loop().time(),
+                ).to_dict(),
+                expect_json=False,
+            )
+            acked_heads[mailbox] = acked_seq
+
         async def _close() -> None:
             return None
 
@@ -126,6 +160,7 @@ class HttpRemoteActorTransport:
             worker_execution_id=worker_execution_id,
             envelopes=_envelopes(),
             sender=_send,
+            acker=_ack,
             aborter=_abort,
             closer=_close,
         )
@@ -172,10 +207,11 @@ class HttpRemoteActorTransport:
         except urllib_error.URLError as exc:
             raise ConnectionError(f"Remote actor request failed: {exc.reason}") from exc
 
-    async def _open_stream(self, *, execution_id: str, after_seq: int):
+    async def _open_stream(self, *, execution_id: str, mailbox: str, after_seq: int):
         query = urllib_parse.urlencode(
             {
                 "execution_id": execution_id,
+                "mailbox": mailbox,
                 "after_seq": str(after_seq),
             }
         )
@@ -351,6 +387,7 @@ class RemoteTaskHttpWorkerServer:
 
                 query = urllib_parse.parse_qs(parsed.query)
                 execution_id = query.get("execution_id", [""])[0]
+                mailbox = query.get("mailbox", ["child_events"])[0] or "child_events"
                 after_seq_raw = query.get("after_seq", ["0"])[0]
                 try:
                     after_seq = int(after_seq_raw or "0")
@@ -370,7 +407,7 @@ class RemoteTaskHttpWorkerServer:
                 self.send_header("X-OA-Worker-Execution-ID", state.worker_execution_id or "")
                 self.send_header("X-OA-Execution-ID", state.execution_id)
                 self.end_headers()
-                _stream_execution(self, state=state, after_seq=after_seq)
+                _stream_execution(self, state=state, mailbox=mailbox, after_seq=after_seq)
 
             def do_POST(self):  # noqa: N802
                 if self.path == "/send":
@@ -381,6 +418,15 @@ class RemoteTaskHttpWorkerServer:
                     state = _lookup_state(envelope.execution_id)
                     if state is None:
                         _write_json(self, 404, {"error": "unknown_execution"})
+                        return
+                    if envelope.kind == "ack":
+                        acked_seq = envelope.seq
+                        if isinstance(envelope.payload, Mapping):
+                            payload_seq = envelope.payload.get("acked_seq")
+                            if isinstance(payload_seq, int) and payload_seq > 0:
+                                acked_seq = payload_seq
+                        state.record_ack(mailbox=envelope.mailbox, acked_seq=acked_seq)
+                        _write_json(self, 202, {"ok": True, "execution_id": envelope.execution_id, "acked_seq": acked_seq})
                         return
                     asyncio.run(state.handle.send(envelope))
                     _write_json(self, 202, {"ok": True, "execution_id": envelope.execution_id})
@@ -445,7 +491,7 @@ class RemoteTaskHttpWorkerServer:
                     self.send_header("X-OA-Worker-Execution-ID", state.worker_execution_id or "")
                     self.send_header("X-OA-Execution-ID", state.execution_id)
                     self.end_headers()
-                    _stream_execution(self, state=state, after_seq=0)
+                    _stream_execution(self, state=state, mailbox="child_events", after_seq=0)
                 except Exception as exc:  # noqa: BLE001
                     _write_json(self, 500, {"error": str(exc)})
 
@@ -455,11 +501,17 @@ class RemoteTaskHttpWorkerServer:
         return ThreadingHTTPServer((self._host, self._port), Handler)
 
 
-def _stream_execution(handler: BaseHTTPRequestHandler, *, state: _ServerExecutionState, after_seq: int) -> None:
+def _stream_execution(
+    handler: BaseHTTPRequestHandler,
+    *,
+    state: _ServerExecutionState,
+    mailbox: str,
+    after_seq: int,
+) -> None:
     next_seq = after_seq
     while True:
         with state.condition:
-            pending = [envelope for envelope in state.envelopes if envelope.seq > next_seq]
+            pending = [envelope for envelope in state.envelopes if envelope.mailbox == mailbox and envelope.seq > next_seq]
             done = state.done
             if not pending and not done:
                 state.condition.wait(timeout=0.1)

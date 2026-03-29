@@ -20,9 +20,18 @@ class TestActorRemoteReplay(unittest.IsolatedAsyncioTestCase):
         from openagentic_sdk.subagents.remote_http import HttpRemoteActorTransport
 
         replay_queries: list[dict[str, list[str]]] = []
+        send_bodies: list[dict[str, object]] = []
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802
+                if self.path == "/send":
+                    length = int(self.headers.get("Content-Length") or "0")
+                    payload = json.loads((self.rfile.read(length) if length > 0 else b"{}").decode("utf-8"))
+                    if isinstance(payload, dict):
+                        send_bodies.append(payload)
+                    self.send_response(202)
+                    self.end_headers()
+                    return
                 if self.path != "/dispatch":
                     self.send_response(404)
                     self.end_headers()
@@ -114,6 +123,11 @@ class TestActorRemoteReplay(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(replay_queries)
         self.assertEqual(replay_queries[0].get("execution_id"), ["exec-http-2"])
         self.assertEqual(replay_queries[0].get("after_seq"), ["1"])
+        self.assertEqual(replay_queries[0].get("mailbox"), ["child_events"])
+        self.assertTrue(send_bodies)
+        self.assertEqual(send_bodies[0].get("kind"), "ack")
+        self.assertEqual(send_bodies[0].get("mailbox"), "child_events")
+        self.assertEqual(send_bodies[0].get("payload"), {"acked_seq": 1, "mailbox": "child_events"})
         self.assertEqual(down.reason_kind, "normal")
 
 

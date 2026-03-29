@@ -48,6 +48,7 @@ _PRELOAD_IMAGES: tuple[tuple[str, str], ...] = (
         "otel/opentelemetry-collector-contrib:latest",
         "docker.io/otel/opentelemetry-collector-contrib:latest",
     ),
+    ("openagentic/jaeger-ui-proxy:v58", "openagentic/jaeger-ui-proxy:v58"),
 )
 
 _READY = False
@@ -110,6 +111,8 @@ def ensure_tracing_ready() -> None:
 
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v57" / "jaeger.yaml")])
     _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v57" / "otel-collector.yaml")])
+    _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v58" / "jaeger-ui-proxy.yaml")])
+    _run(["kubectl", "apply", "-f", str(repo_root() / "deploy" / "k8s" / "v58" / "jaeger-ui-overlay.yaml")])
     _patch_tracing_deployment(
         deployment=WORKER_A_DEPLOYMENT,
         container_name="worker",
@@ -440,6 +443,13 @@ def _ensure_image_present(image_ref: str) -> None:
     inspect = _run(["docker", "image", "inspect", image_ref], check=False)
     if inspect.returncode == 0:
         return
+    if image_ref == "openagentic/jaeger-ui-proxy:v58":
+        raise RuntimeError(
+            "Required local runtime image 'openagentic/jaeger-ui-proxy:v58' is missing. "
+            "Build it in WSL from repo root with: "
+            "docker build -f deploy/k8s/v58/jaeger-ui-proxy.runtime.Dockerfile "
+            "-t openagentic/jaeger-ui-proxy:v58 ."
+        )
     pull = _run(["docker", "pull", image_ref], check=False, env=_docker_pull_env())
     if pull.returncode == 0:
         return

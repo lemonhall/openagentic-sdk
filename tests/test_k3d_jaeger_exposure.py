@@ -44,6 +44,7 @@ class TestK3dJaegerExposure(unittest.TestCase):
         image_refs = {image_ref for image_ref, _expected_ref in _harness._PRELOAD_IMAGES}
         self.assertIn("jaegertracing/all-in-one:latest", image_refs)
         self.assertIn("otel/opentelemetry-collector-contrib:latest", image_refs)
+        self.assertIn("openagentic/jaeger-ui-proxy:v58", image_refs)
 
 
 if __name__ == "__main__":

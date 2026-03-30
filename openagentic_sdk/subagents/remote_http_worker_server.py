@@ -36,7 +36,7 @@ def build_remote_http_worker_from_remote_config(
         health_status["provider_errors"] = list(bootstrap.self_check.errors)
     options = OpenAgenticOptions(
         provider=UnavailableRemoteProvider(),
-        model=bootstrap.host_model or "gpt-5.2",
+        model=bootstrap.host_model or "gpt-5.4",
         cwd=repo_root,
         project_dir=repo_root,
         tools=default_tool_registry(),

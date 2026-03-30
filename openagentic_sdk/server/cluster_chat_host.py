@@ -407,7 +407,7 @@ def build_cluster_chat_host_from_remote_config(
         health_status["provider_errors"] = list(bootstrap.self_check.errors)
     options = OpenAgenticOptions(
         provider=provider,
-        model=bootstrap.host_model or "gpt-5.2",
+        model=bootstrap.host_model or "gpt-5.4",
         api_key=bootstrap.host_provider_spec.api_key if bootstrap.host_provider_spec is not None else None,
         cwd=repo_root,
         project_dir=repo_root,

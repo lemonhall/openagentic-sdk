@@ -344,7 +344,7 @@ def build_options(
     # primary selection mechanism and should override OA_PROVIDER heuristics.
     raw_model = cfg.get("model") if isinstance(cfg, dict) and isinstance(cfg.get("model"), str) else None
     if not raw_model:
-        raw_model = os.getenv("RIGHTCODE_MODEL", "gpt-5.2")
+        raw_model = os.getenv("RIGHTCODE_MODEL", "gpt-5.4")
     model_ref = parse_model_ref(raw_model)
 
     # Provider config (OpenCode parity, minimal): allow selecting a configured provider
@@ -438,7 +438,7 @@ def build_options(
     return OpenAgenticOptions(
         provider=provider_obj,
         api_key=api_key_val,
-        model=(model_ref.model_id if model_ref.provider_id else str(raw_model or "gpt-5.2")),
+        model=(model_ref.model_id if model_ref.provider_id else str(raw_model or "gpt-5.4")),
         cwd=cwd,
         project_dir=project_dir,
         tools=tools,

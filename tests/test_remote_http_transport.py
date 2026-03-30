@@ -764,7 +764,7 @@ class TestRemoteHttpTransport(unittest.IsolatedAsyncioTestCase):
                     prompt="REMOTE_HTTP_DEF: follow instructions",
                     tools=("Read",),
                     provider_spec=provider_spec,
-                    model="gpt-5.2",
+                    model="gpt-5.4",
                     executor=AgentExecutorDefinition(kind="k3s", node_name="node-http"),
                     workspace=AgentWorkspaceDefinition(mode="readonly"),
                 )

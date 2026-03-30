@@ -18,7 +18,7 @@ class TestCliConfig(unittest.TestCase):
                     permission_mode="prompt",
                 )
             self.assertIsNotNone(opts.provider)
-            self.assertEqual(opts.model, os.environ.get("RIGHTCODE_MODEL", "gpt-5.2"))
+            self.assertEqual(opts.model, os.environ.get("RIGHTCODE_MODEL", "gpt-5.4"))
         finally:
             os.environ.pop("RIGHTCODE_API_KEY", None)
             os.environ.pop("OPENCODE_TEST_HOME", None)

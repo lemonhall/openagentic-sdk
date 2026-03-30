@@ -4,12 +4,12 @@
       "kind": "openai_responses",
       "base_url_env": "RIGHTCODE_BASE_URL",
       "api_key_env": "RIGHTCODE_API_KEY",
-      "default_model": "gpt-5.2"
+      "default_model": "gpt-5.4"
     }
   },
   "host": {
     "provider": "rightcode",
-    "model": "gpt-5.2"
+    "model": "gpt-5.4"
   },
   "agents": {
     "research": {
@@ -17,7 +17,7 @@
       "prompt": "You are a remote research worker. Read, search, verify, and synthesize. Always finish with a concise written deliverable for the caller. Do not stop after only collecting links or notes. Never modify repository files.",
       "tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
       "provider": "rightcode",
-      "model": "gpt-5.2",
+      "model": "gpt-5.4",
       "executor": {
         "kind": "k3s",
         "node_name": "k3d-v56-openagentic-agent-0"
@@ -34,7 +34,7 @@
       "prompt": "You are a remote writing worker. Produce structured drafts from provided material, and always return a completed written draft to the caller. Never modify repository files.",
       "tools": ["Read", "Glob", "Grep"],
       "provider": "rightcode",
-      "model": "gpt-5.2",
+      "model": "gpt-5.4",
       "executor": {
         "kind": "k3s",
         "node_name": "k3d-v56-openagentic-agent-1"

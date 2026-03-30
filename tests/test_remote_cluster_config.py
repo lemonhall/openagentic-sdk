@@ -20,12 +20,12 @@ class TestRemoteClusterConfig(unittest.TestCase):
                                 "kind": "openai_responses",
                                 "base_url_env": "RIGHTCODE_BASE_URL",
                                 "api_key_env": "RIGHTCODE_API_KEY",
-                                "default_model": "gpt-5.2",
+                                "default_model": "gpt-5.4",
                             }
                         },
                         "host": {
                             "provider": "rightcode",
-                            "model": "gpt-5.2",
+                            "model": "gpt-5.4",
                         },
                         "agents": {
                             "research": {
@@ -33,7 +33,7 @@ class TestRemoteClusterConfig(unittest.TestCase):
                                 "prompt": "You are a research worker.",
                                 "tools": ["Read", "WebSearch"],
                                 "provider": "rightcode",
-                                "model": "gpt-5.2-mini",
+                                "model": "gpt-5.4",
                                 "executor": {"kind": "k3s", "node_name": "node-a"},
                                 "workspace": {"mode": "readonly"},
                             }
@@ -57,11 +57,11 @@ class TestRemoteClusterConfig(unittest.TestCase):
         self.assertEqual(type(bootstrap.host_provider).__name__, "OpenAIResponsesProvider")
         self.assertEqual(bootstrap.host_provider_spec.provider_name, "rightcode")
         self.assertEqual(bootstrap.host_provider_spec.api_key, "rc-secret")
-        self.assertEqual(bootstrap.host_model, "gpt-5.2")
+        self.assertEqual(bootstrap.host_model, "gpt-5.4")
         self.assertEqual(tuple(sorted(bootstrap.provider_profiles)), ("rightcode",))
 
         research = bootstrap.agents["research"]
-        self.assertEqual(research.model, "gpt-5.2-mini")
+        self.assertEqual(research.model, "gpt-5.4")
         self.assertEqual(research.executor.kind, "k3s")
         self.assertEqual(research.executor.node_name, "node-a")
         self.assertEqual(research.workspace.mode, "readonly")
@@ -83,7 +83,7 @@ class TestRemoteClusterConfig(unittest.TestCase):
                                 "kind": "openai_responses",
                                 "base_url_env": "RIGHTCODE_BASE_URL",
                                 "api_key_env": "RIGHTCODE_API_KEY",
-                                "default_model": "gpt-5.2",
+                                "default_model": "gpt-5.4",
                             }
                         },
                         "host": {"provider": "rightcode"},

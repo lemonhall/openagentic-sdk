@@ -10,10 +10,54 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from ..events import AssistantMessage
 from ..serialization import event_from_dict
 
 _STREAM_END = object()
 _MIN_STREAM_IDLE_TIMEOUT_S = 35.0
+_SESSION_EVENT_POLL_INTERVAL_S = 2.0
+_SESSION_SYNC_RESULT_GRACE_POLLS = 2
+
+
+def _event_signature(payload: dict[str, Any]) -> str:
+    normalized = {k: v for k, v in payload.items() if k not in {"seq", "ts"}}
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _is_root_result_event(event: Any) -> bool:
+    if getattr(event, "type", None) != "result":
+        return False
+    agent_name = getattr(event, "agent_name", None)
+    if isinstance(agent_name, str) and agent_name:
+        return False
+    parent_tool_use_id = getattr(event, "parent_tool_use_id", None)
+    if isinstance(parent_tool_use_id, str) and parent_tool_use_id:
+        return False
+    return True
+
+
+def _is_root_assistant_event(event: Any) -> bool:
+    if getattr(event, "type", None) != "assistant.message":
+        return False
+    agent_name = getattr(event, "agent_name", None)
+    if isinstance(agent_name, str) and agent_name:
+        return False
+    parent_tool_use_id = getattr(event, "parent_tool_use_id", None)
+    if isinstance(parent_tool_use_id, str) and parent_tool_use_id:
+        return False
+    return True
+
+
+def _root_assistant_signature(final_text: str) -> str:
+    return _event_signature(
+        {
+            "type": "assistant.message",
+            "text": final_text,
+            "is_summary": False,
+            "parent_tool_use_id": None,
+            "agent_name": None,
+        }
+    )
 
 
 def _request_json(url: str, *, method: str, payload: dict[str, Any] | None = None, timeout_s: float = 10.0) -> dict[str, Any]:
@@ -141,6 +185,9 @@ class ClusterChatClient:
     def get_session(self, *, session_id: str) -> dict[str, Any]:
         return _request_json(self.base_url.rstrip("/") + f"/session/{session_id}", method="GET", timeout_s=self.timeout_s)
 
+    def get_events(self, *, session_id: str) -> dict[str, Any]:
+        return _request_json(self.base_url.rstrip("/") + f"/session/{session_id}/events", method="GET", timeout_s=self.timeout_s)
+
     def create_session(self, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         return _request_json(
             self.base_url.rstrip("/") + "/session",
@@ -187,6 +234,9 @@ class ClusterChatClient:
                 raise RuntimeError("remote chat host did not return a session id")
             session_id = sid
 
+        history_event_signatures = await self._session_history_signatures(session_id=session_id)
+        live_history_replay_index = 0
+
         # The SSE endpoint is long-lived and can legitimately stay quiet until the
         # host emits the next session event or periodic heartbeat (currently 30s).
         # Keep the control-plane timeout for POST/GET requests, but give the event
@@ -209,9 +259,40 @@ class ClusterChatClient:
                 abort_task = asyncio.create_task(_relay_abort())
 
             self.prompt_async(session_id=session_id, prompt=prompt)
-            seen_result = False
+            emitted_event_signatures: list[str] = []
+            seen_root_result = False
+            fallback_mode = False
+            root_assistant_seen = False
             while True:
-                payload = await stream.next()
+                try:
+                    payload = await asyncio.wait_for(stream.next(), timeout=_SESSION_EVENT_POLL_INTERVAL_S)
+                except asyncio.TimeoutError:
+                    polled_events, done = await self._poll_session_events(
+                        session_id=session_id,
+                        history_event_signatures=history_event_signatures,
+                        emitted_event_signatures=emitted_event_signatures,
+                    )
+                    for event in polled_events:
+                        if _is_root_assistant_event(event):
+                            root_assistant_seen = True
+                        yield event
+                    if done:
+                        return
+                    continue
+                except RuntimeError:
+                    fallback_mode = True
+                    polled_events, done = await self._poll_session_events(
+                        session_id=session_id,
+                        history_event_signatures=history_event_signatures,
+                        emitted_event_signatures=emitted_event_signatures,
+                    )
+                    for event in polled_events:
+                        if _is_root_assistant_event(event):
+                            root_assistant_seen = True
+                        yield event
+                    if done:
+                        return
+                    raise
                 envelope_type = payload.get("type")
                 envelope_session_id = payload.get("session_id")
                 if envelope_type == "session.event" and envelope_session_id == session_id:
@@ -219,9 +300,29 @@ class ClusterChatClient:
                     if not isinstance(event_payload, dict):
                         raise RuntimeError("remote chat host returned an invalid event payload")
                     event = event_from_dict(event_payload)
+                    event_sig = _event_signature(event_payload)
+                    if (
+                        live_history_replay_index < len(history_event_signatures)
+                        and event_sig == history_event_signatures[live_history_replay_index]
+                    ):
+                        live_history_replay_index += 1
+                    else:
+                        emitted_event_signatures.append(event_sig)
+                    if _is_root_assistant_event(event):
+                        root_assistant_seen = True
+                    if _is_root_result_event(event) and not root_assistant_seen:
+                        final_text = getattr(event, "final_text", None)
+                        if isinstance(final_text, str) and final_text:
+                            synthetic_sig = _root_assistant_signature(final_text)
+                            if synthetic_sig not in emitted_event_signatures:
+                                emitted_event_signatures.append(synthetic_sig)
+                            root_assistant_seen = True
+                            yield AssistantMessage(text=final_text)
                     yield event
-                    if getattr(event, "type", None) == "result":
-                        seen_result = True
+                    if _is_root_result_event(event):
+                        if fallback_mode:
+                            return
+                        seen_root_result = True
                     continue
                 if envelope_type == "session.sync" and envelope_session_id == session_id:
                     sync_payload = payload.get("sync")
@@ -231,13 +332,77 @@ class ClusterChatClient:
                     if status != "ok":
                         suffix = f": {reason}" if isinstance(reason, str) and reason else ""
                         raise RuntimeError(f"remote session sync failed ({status}){suffix}")
-                    if seen_result:
+                    for _attempt in range(max(1, int(_SESSION_SYNC_RESULT_GRACE_POLLS))):
+                        polled_events, done = await self._poll_session_events(
+                            session_id=session_id,
+                            history_event_signatures=history_event_signatures,
+                            emitted_event_signatures=emitted_event_signatures,
+                        )
+                        for event in polled_events:
+                            if _is_root_assistant_event(event):
+                                root_assistant_seen = True
+                            yield event
+                        if done:
+                            return
+                        await asyncio.sleep(_SESSION_EVENT_POLL_INTERVAL_S)
+                    if seen_root_result:
                         return
                     raise RuntimeError("remote session ended before emitting a result event")
         finally:
             stream.close()
             if abort_task is not None:
                 abort_task.cancel()
+
+    async def _poll_session_events(
+        self,
+        *,
+        session_id: str,
+        history_event_signatures: list[str],
+        emitted_event_signatures: list[str],
+    ) -> tuple[list[Any], bool]:
+        payload = await asyncio.to_thread(self.get_events, session_id=session_id)
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            return [], False
+        visible_entries = [entry for entry in entries if isinstance(entry, dict) and entry.get("type") != "user.message"]
+        history_count = len(history_event_signatures)
+        if len(visible_entries) < history_count:
+            return [], False
+        for idx, expected in enumerate(history_event_signatures):
+            if _event_signature(visible_entries[idx]) != expected:
+                return [], False
+        current_visible_entries = visible_entries[history_count:]
+        known_current_signatures = list(emitted_event_signatures)
+        known_idx = 0
+
+        emitted: list[Any] = []
+        done = False
+        rebuilt_current_signatures: list[str] = []
+        for entry in current_visible_entries:
+            sig = _event_signature(entry)
+            rebuilt_current_signatures.append(sig)
+            if known_idx < len(known_current_signatures) and sig == known_current_signatures[known_idx]:
+                known_idx += 1
+                continue
+            event = event_from_dict(entry)
+            emitted.append(event)
+            if _is_root_result_event(event):
+                done = True
+        if known_idx != len(known_current_signatures):
+            return [], False
+        emitted_event_signatures[:] = rebuilt_current_signatures
+        return emitted, done
+
+    async def _session_history_signatures(self, *, session_id: str) -> list[str]:
+        payload = await asyncio.to_thread(self.get_events, session_id=session_id)
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            return []
+        return [
+            _event_signature(entry)
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("type") != "user.message"
+        ]
 
 
 class ClusterChatRuntime:

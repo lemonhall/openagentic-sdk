@@ -121,6 +121,8 @@ class TestRemoteClusterConfig(unittest.TestCase):
         self.assertEqual(getattr(provider, "name", None), "rightcode")
         self.assertEqual(getattr(provider, "base_url", None), "https://rightcode.example.test/v1")
         self.assertEqual(getattr(provider, "timeout_s", None), 180.0)
+        self.assertEqual(getattr(provider, "max_retries", None), 2)
+        self.assertEqual(getattr(provider, "retry_backoff_s", None), 0.5)
 
 
 if __name__ == "__main__":

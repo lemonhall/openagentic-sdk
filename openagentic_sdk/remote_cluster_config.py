@@ -17,6 +17,8 @@ from .providers.openai_compatible import OpenAICompatibleProvider
 from .providers.openai_responses import OpenAIResponsesProvider
 
 _REMOTE_CLUSTER_PROVIDER_TIMEOUT_S = 180.0
+_REMOTE_CLUSTER_PROVIDER_MAX_RETRIES = 2
+_REMOTE_CLUSTER_PROVIDER_RETRY_BACKOFF_S = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +118,8 @@ def build_provider_from_spec(spec: ResolvedRemoteProviderSpec) -> Provider:
             base_url=spec.base_url,
             api_key_header=spec.api_key_header,
             timeout_s=_REMOTE_CLUSTER_PROVIDER_TIMEOUT_S,
+            max_retries=_REMOTE_CLUSTER_PROVIDER_MAX_RETRIES,
+            retry_backoff_s=_REMOTE_CLUSTER_PROVIDER_RETRY_BACKOFF_S,
         )
     if spec.kind == "openai_compatible":
         return OpenAICompatibleProvider(
@@ -123,6 +127,8 @@ def build_provider_from_spec(spec: ResolvedRemoteProviderSpec) -> Provider:
             base_url=spec.base_url,
             api_key_header=spec.api_key_header,
             timeout_s=_REMOTE_CLUSTER_PROVIDER_TIMEOUT_S,
+            max_retries=_REMOTE_CLUSTER_PROVIDER_MAX_RETRIES,
+            retry_backoff_s=_REMOTE_CLUSTER_PROVIDER_RETRY_BACKOFF_S,
         )
     raise ValueError(f"Unsupported remote provider kind: {spec.kind}")
 

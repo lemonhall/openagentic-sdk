@@ -69,6 +69,12 @@ def _invalidate_pending_prompt_prefetch(*, session: object, prompt_task: asyncio
         invalidate()
 
 
+def _is_recoverable_turn_error(exc: BaseException) -> bool:
+    # Provider / remote-host failures are surfaced as RuntimeError and should only
+    # fail the current turn. Keep the REPL alive so the user can retry or continue.
+    return isinstance(exc, RuntimeError)
+
+
 _CWD_QUESTION_RE = re.compile(
     r"^\s*(?:当前目录(?:是|为)?|当前路径|pwd|where am i|current directory)\s*[?？]?\s*$",
     re.IGNORECASE,
@@ -616,12 +622,21 @@ async def run_chat_impl(
                     except KeyboardInterrupt:
                         if current_abort_event is not None:
                             current_abort_event.set()
+                        current_abort_event = None
                         _print(stdout, dim("interrupted", enabled=enable_color))
                         continue
                     except SystemExit as e:
                         _print(stdout, fg_red(str(e), enabled=enable_color))
                         return 1
                     except Exception as e:  # noqa: BLE001
+                        if _is_recoverable_turn_error(e):
+                            current_abort_event = None
+                            if session_id:
+                                opts = replace(opts, resume=session_id)
+                            _print(stdout, fg_red(str(e), enabled=enable_color))
+                            _print(stdout, "")
+                            _invalidate_pending_prompt_prefetch(session=session, prompt_task=prompt_task)
+                            continue
                         _print(stdout, fg_red(str(e), enabled=enable_color))
                         return 1
             finally:
@@ -808,12 +823,19 @@ async def run_chat_impl(
             except KeyboardInterrupt:
                 if current_abort_event is not None:
                     current_abort_event.set()
+                current_abort_event = None
                 _print(stdout, dim("interrupted", enabled=enable_color))
                 continue
             except SystemExit as e:
                 _print(stdout, fg_red(str(e), enabled=enable_color))
                 return 1
             except Exception as e:  # noqa: BLE001
+                if _is_recoverable_turn_error(e):
+                    current_abort_event = None
+                    if session_id:
+                        opts = replace(opts, resume=session_id)
+                    _print(stdout, fg_red(str(e), enabled=enable_color))
+                    continue
                 _print(stdout, fg_red(str(e), enabled=enable_color))
                 return 1
     finally:

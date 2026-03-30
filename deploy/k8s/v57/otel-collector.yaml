@@ -41,6 +41,18 @@ spec:
       labels:
         app.kubernetes.io/name: otel-collector
     spec:
+      initContainers:
+        - name: wait-for-jaeger-otlp
+          image: jaegertracing/all-in-one:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -lc
+            - |
+              set -eu
+              until nc -z jaeger-query.openagentic-v56.svc.cluster.local 4317; do
+                sleep 2
+              done
       containers:
         - name: otel-collector
           image: otel/opentelemetry-collector-contrib:latest

@@ -236,6 +236,29 @@ v61 现场又暴露出另一条冷启动脆弱链路：
 - 冷启动时又能跨过 k3d/kube 控制面那段最容易抖动的时间窗；
 - 失败时也不再是“120 秒到了就直接 traceback”，而是先把 cluster 醒稳再继续。
 
+### 2.8 `otel-collector` 启动前显式等待 Jaeger OTLP 端口
+
+`2026-03-30` 的现场又抓到一条更细的竞态：
+
+- WSL2 重启后，Jaeger Web UI 本身可能已经恢复；
+- 但 `otel-collector` 如果比 `jaeger-query:4317` 更早起来，启动期日志会出现：
+  - `connect: connection refused`
+  - `i/o timeout`
+- 这时用户看到的外部症状是：
+  - `http://127.0.0.1:16686` 能打开
+  - 但 `/api/services` 长时间只剩 `jaeger-all-in-one`
+  - 即使 `oa chat --k3d-real` 和 remote subagent 已经恢复，新的 host/worker trace 还是打不进去
+
+当前结构性修复是：
+
+- `deploy/k8s/v57/otel-collector.yaml` 的 deployment 新增 `initContainer`
+- 在真正启动 collector 之前，先阻塞等待：
+  - `jaeger-query.openagentic-v56.svc.cluster.local:4317`
+- 为了避免离线环境里的 `ErrImagePull`，等待容器不再用 `busybox`，而是复用节点本来就已有的：
+  - `jaegertracing/all-in-one:latest`
+
+这条修复的目标不是“让 Jaeger 更快”，而是避免 exporter 在 Jaeger 还没 ready 的窗口里先启动后卡死。
+
 ## 3. 当前验证结论
 
 这次回归已经验证了下面几件事：
@@ -252,6 +275,13 @@ v61 现场又暴露出另一条冷启动脆弱链路：
    - 再通过 `ManagedK3dChatPortForward` 走同一条 `oa chat --k3d-real` 恢复链
    - 从冷启动开始到 real host `/health` 恢复，实测约 `279s`
    - 随后真实 writer 派发与 `http://127.0.0.1:16686/api/services` 均恢复正常
+6. 在同一天的二次诊断里：
+   - Jaeger UI 空白并不是 UI 自己坏了
+   - 真正的断点是 `otel-collector -> jaeger-query:4317`
+   - 手工重启一次 `otel-collector` 能立即恢复 trace 导出
+   - 修复后再触发一次 writer remote task，`/api/services` 会重新出现：
+     - `oa-cluster-chat-host-real`
+     - `oa-remote-worker-real`
 
 换句话说：
 
